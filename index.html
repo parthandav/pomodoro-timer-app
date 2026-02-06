@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomodoro Timer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Pomodoro Timer</h1>
+            <div class="mode-indicator" id="modeIndicator">Work Mode</div>
+        </header>
+
+        <main>
+            <div class="timer-section">
+                <div class="timer-display" id="timerDisplay">25:00</div>
+
+                <div class="controls">
+                    <button class="btn btn-primary" id="startPauseBtn" aria-label="Start or pause timer">Start</button>
+                    <button class="btn btn-secondary" id="resetBtn" aria-label="Reset timer">Reset</button>
+                    <button class="btn btn-secondary" id="switchModeBtn" aria-label="Switch between work and break mode">Switch to Break</button>
+                </div>
+            </div>
+
+            <div class="task-section">
+                <div class="task-input-container">
+                    <label for="taskInput">What are you working on?</label>
+                    <input
+                        type="text"
+                        id="taskInput"
+                        placeholder="Enter your task..."
+                        aria-label="Task description"
+                        maxlength="100"
+                    >
+                </div>
+
+                <div class="task-history">
+                    <div class="task-history-header">
+                        <h2>Task History</h2>
+                        <button class="btn btn-small" id="clearHistoryBtn" aria-label="Clear task history">Clear History</button>
+                    </div>
+                    <div class="task-list" id="taskList">
+                        <p class="empty-state">No tasks completed yet. Start a timer to begin!</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Built with vanilla JavaScript | <a href="https://en.wikipedia.org/wiki/Pomodoro_Technique" target="_blank" rel="noopener">Learn about Pomodoro</a></p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
