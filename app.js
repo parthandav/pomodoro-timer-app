@@ -1,12 +1,13 @@
 // Timer State
 const WORK_DURATION = 25 * 60; // 25 minutes in seconds
-const BREAK_DURATION = 5 * 60; // 5 minutes in seconds
 
 let currentTime = WORK_DURATION;
 let timerInterval = null;
 let isRunning = false;
 let currentMode = 'work'; // 'work' or 'break'
 let endTime = null; // Timestamp when timer should reach 0
+let breakStartTime = null; // Timestamp when break started (for open-ended breaks)
+let isBreakActive = false; // Whether a break is currently in progress
 let tasks = [];
 
 // Categories State
@@ -87,38 +88,63 @@ function startTimer() {
     }
 
     isRunning = true;
-    startPauseBtn.textContent = 'Pause';
-    startPauseBtn.classList.add('active');
 
-    // Calculate target end time based on current remaining time
-    endTime = Date.now() + (currentTime * 1000);
-
-    timerInterval = setInterval(() => {
-        // Calculate remaining time based on actual elapsed time
-        const remainingMs = endTime - Date.now();
-        currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
-
-        updateDisplay();
-        updateTabTitle();
-
-        if (currentTime <= 0) {
-            timerComplete();
+    if (currentMode === 'break') {
+        // Break mode: count UP (elapsed time)
+        // Break auto-starts when switching to break mode, so breakStartTime is already set
+        if (!isBreakActive) {
+            isBreakActive = true;
+            breakStartTime = Date.now();
         }
-    }, 100); // Check more frequently (every 100ms) for better accuracy
+
+        // Hide start/pause button during break (breaks don't pause)
+        startPauseBtn.style.display = 'none';
+
+        timerInterval = setInterval(() => {
+            const elapsedMs = Date.now() - breakStartTime;
+            currentTime = Math.floor(elapsedMs / 1000);
+            updateDisplay();
+            updateTabTitle();
+        }, 100);
+    } else {
+        // Focus mode: count DOWN (remaining time)
+        startPauseBtn.textContent = 'Pause';
+        startPauseBtn.classList.add('active');
+
+        // Calculate target end time based on current remaining time
+        endTime = Date.now() + (currentTime * 1000);
+
+        timerInterval = setInterval(() => {
+            // Calculate remaining time based on actual elapsed time
+            const remainingMs = endTime - Date.now();
+            currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
+
+            updateDisplay();
+            updateTabTitle();
+
+            if (currentTime <= 0) {
+                timerComplete();
+            }
+        }, 100);
+    }
 }
 
 function pauseTimer() {
     isRunning = false;
-    startPauseBtn.textContent = 'Start';
-    startPauseBtn.classList.remove('active');
     clearInterval(timerInterval);
 
-    // Calculate and save the actual remaining time when pausing
-    if (endTime !== null) {
-        const remainingMs = endTime - Date.now();
-        currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
-        endTime = null;
+    if (currentMode === 'work') {
+        startPauseBtn.textContent = 'Start';
+        startPauseBtn.classList.remove('active');
+
+        // Calculate and save the actual remaining time when pausing
+        if (endTime !== null) {
+            const remainingMs = endTime - Date.now();
+            currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
+            endTime = null;
+        }
     }
+    // For breaks, we don't update currentTime here - it keeps showing elapsed time
 
     updateDisplay();
     document.title = 'Pomodoro Timer';
@@ -127,60 +153,96 @@ function pauseTimer() {
 function resetTimer() {
     pauseTimer();
     endTime = null;
-    currentTime = currentMode === 'work' ? WORK_DURATION : BREAK_DURATION;
+
+    if (currentMode === 'work') {
+        currentTime = WORK_DURATION;
+    } else {
+        // Reset break elapsed time to 0 and restart tracking
+        currentTime = 0;
+        breakStartTime = Date.now();
+    }
+
     updateDisplay();
     document.title = 'Pomodoro Timer';
 }
 
 function switchMode() {
-    pauseTimer();
-
     if (currentMode === 'work') {
+        // Switching TO break mode
+        pauseTimer();
+
         currentMode = 'break';
-        currentTime = BREAK_DURATION;
+        currentTime = 0; // Break starts at 00:00 and counts up
         modeIndicator.textContent = 'Break Mode';
         modeIndicator.classList.add('break-mode');
         timerDisplay.classList.add('break-mode');
         startPauseBtn.classList.add('break-mode');
         switchModeBtn.textContent = 'Switch to Focus';
+
+        // Auto-start break timer immediately
+        isBreakActive = true;
+        breakStartTime = Date.now();
+        startTimer(); // This will start the count-up interval
+
+        updateDisplay();
     } else {
+        // Switching FROM break TO focus mode
+        // Calculate break duration before stopping
+        let breakDuration = 0;
+        if (isBreakActive && breakStartTime) {
+            breakDuration = Math.floor((Date.now() - breakStartTime) / 1000);
+        }
+
+        pauseTimer();
+
+        // Prompt for break activity
+        const breakActivity = prompt('What did you do during your break?', 'Break');
+        const description = (breakActivity && breakActivity.trim()) ? breakActivity.trim() : 'Break';
+
+        // Save break to history with actual duration
+        saveTaskToHistory(description, 'break', breakDuration);
+
+        // Reset break state
+        isBreakActive = false;
+        breakStartTime = null;
+
+        // Switch to focus mode
         currentMode = 'work';
         currentTime = WORK_DURATION;
         modeIndicator.textContent = 'Focus Mode';
         modeIndicator.classList.remove('break-mode');
         timerDisplay.classList.remove('break-mode');
         startPauseBtn.classList.remove('break-mode');
+        startPauseBtn.style.display = ''; // Show start button again
         switchModeBtn.textContent = 'Switch to Break';
-    }
 
-    updateDisplay();
-    document.title = 'Pomodoro Timer';
+        updateDisplay();
+        document.title = 'Pomodoro Timer';
+    }
 }
 
 function timerComplete() {
+    // Breaks never auto-complete - they run until user switches to focus
+    if (currentMode === 'break') return;
+
     pauseTimer();
 
     // Play completion sound
     playCompletionSound();
 
-    // Save task to history if it's a work session
-    const completedTaskName = currentMode === 'work' ? (taskInput.value.trim() || 'Untitled Task') : 'Break';
-
-    if (currentMode === 'work') {
-        saveTaskToHistory(completedTaskName, currentMode, WORK_DURATION);
-        taskInput.value = ''; // Clear input after completion
-    } else {
-        saveTaskToHistory('Break', currentMode, BREAK_DURATION);
-    }
+    // Save focus session to history
+    const completedTaskName = taskInput.value.trim() || 'Untitled Task';
+    saveTaskToHistory(completedTaskName, currentMode, WORK_DURATION);
+    taskInput.value = ''; // Clear input after completion
 
     // Show browser notification
     showNotification(
-        `${currentMode === 'work' ? 'Focus' : 'Break'} Complete!`,
+        'Focus Complete!',
         `Great job! You completed: ${completedTaskName}`
     );
 
     // Also show alert as fallback
-    alert(`${currentMode === 'work' ? 'Focus' : 'Break'} session complete! Great job!`);
+    alert('Focus session complete! Great job!');
 
     // Flash the tab title to get attention
     flashTabTitle();
@@ -197,6 +259,18 @@ function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return `${seconds} sec`;
+    }
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) {
+        return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    }
+    return `${mins} min`;
 }
 
 function updateTabTitle() {
@@ -668,7 +742,7 @@ function createTaskElement(task) {
     timestamp.textContent = formatTimestamp(task.timestamp);
 
     const duration = document.createElement('span');
-    duration.textContent = `Duration: ${task.duration / 60} min`;
+    duration.textContent = `Duration: ${formatDuration(task.duration)}`;
 
     taskMetadata.appendChild(timestamp);
     taskMetadata.appendChild(duration);

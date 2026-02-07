@@ -5,11 +5,13 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 ## Features
 
 ### Timer Functionality
-- **Work Sessions**: 25-minute focused work periods
-- **Break Sessions**: 5-minute rest periods
+- **Focus Sessions**: 25-minute focused work periods (countdown timer)
+- **Open-Ended Breaks**: Breaks count up from 00:00 and run until you start a new focus session
+- **Break Activity Tracking**: When ending a break, you're prompted to describe what you did
+- **Accurate Duration**: Break durations are recorded based on actual elapsed wall-clock time
 - **Easy Controls**: Start, pause, reset, and switch between modes
-- **Visual Feedback**: Color-coded modes (teal for work, green for breaks)
-- **Browser Tab Updates**: See remaining time in your browser tab while working
+- **Visual Feedback**: Color-coded modes (teal for focus, green for breaks)
+- **Browser Tab Updates**: See remaining/elapsed time in your browser tab
 
 ### Task Tracking
 - **Task Input**: Enter what you're working on before starting a session
@@ -52,8 +54,9 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 1. **Select Category**: Choose a category from the dropdown (defaults to your preferred category)
 2. **Enter Your Task**: Type what you'll be working on in the input field
 3. **Start Working**: Click the "Start" button to begin your 25-minute focus session
-4. **Take Breaks**: When the timer completes, switch to Break mode for a 5-minute rest
-5. **Track Progress**: View your completed sessions in the Task History section with category badges
+4. **Take a Break**: When the timer completes, click "Switch to Break" - the break timer auto-starts and counts up
+5. **End Your Break**: When ready to work again, click "Switch to Focus" - you'll be prompted to describe what you did during the break
+6. **Track Progress**: View all focus sessions and breaks in the Task History with actual durations
 
 ### Managing Categories
 1. **Navigate to Categories**: Click the "Categories" button in the header navigation
@@ -66,9 +69,10 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 5. **Return to Timer**: Click the "Timer" button to continue working
 
 ### Controls
-- **Start/Pause**: Begin or pause the current timer
-- **Reset**: Reset the current session to its full duration
-- **Switch Mode**: Toggle between Focus and Break modes
+- **Start/Pause**: Begin or pause the focus timer (hidden during breaks since breaks auto-run)
+- **Reset**: Reset the focus timer to 25:00, or reset break elapsed time to 00:00
+- **Switch to Break**: Start an open-ended break with elapsed time tracking
+- **Switch to Focus**: End the current break (prompts for activity) and return to focus mode
 - **Clear History**: Remove all saved task history
 - **Timer/Categories**: Navigate between timer and category management views
 
