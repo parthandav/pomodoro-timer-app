@@ -10,30 +10,41 @@
     <div class="container">
         <header>
             <h1>Pomodoro Timer</h1>
-            <div class="mode-indicator" id="modeIndicator">Work Mode</div>
+            <nav class="navigation">
+                <button class="nav-btn active" id="timerNavBtn" aria-label="Go to timer view">Timer</button>
+                <button class="nav-btn" id="categoriesNavBtn" aria-label="Go to categories view">Categories</button>
+            </nav>
+            <div class="mode-indicator" id="modeIndicator">Focus Mode</div>
         </header>
 
         <main>
+        <!-- Timer View -->
+        <div id="timerView" class="view">
             <div class="timer-section">
                 <div class="timer-display" id="timerDisplay">25:00</div>
 
                 <div class="controls">
                     <button class="btn btn-primary" id="startPauseBtn" aria-label="Start or pause timer">Start</button>
                     <button class="btn btn-secondary" id="resetBtn" aria-label="Reset timer">Reset</button>
-                    <button class="btn btn-secondary" id="switchModeBtn" aria-label="Switch between work and break mode">Switch to Break</button>
+                    <button class="btn btn-secondary" id="switchModeBtn" aria-label="Switch between focus and break mode">Switch to Break</button>
                 </div>
             </div>
 
             <div class="task-section">
                 <div class="task-input-container">
                     <label for="taskInput">What are you working on?</label>
-                    <input
-                        type="text"
-                        id="taskInput"
-                        placeholder="Enter your task..."
-                        aria-label="Task description"
-                        maxlength="100"
-                    >
+                    <div class="task-input-row">
+                        <input
+                            type="text"
+                            id="taskInput"
+                            placeholder="Enter your task..."
+                            aria-label="Task description"
+                            maxlength="100"
+                        >
+                        <select id="categorySelect" aria-label="Select task category">
+                            <!-- Categories populated by JavaScript -->
+                        </select>
+                    </div>
                 </div>
 
                 <div class="task-history">
@@ -46,6 +57,47 @@
                     </div>
                 </div>
             </div>
+        </div>
+        <!-- End Timer View -->
+
+        <!-- Categories View -->
+        <div id="categoriesView" class="view hidden">
+            <div class="categories-section">
+                <h2>Manage Categories</h2>
+
+                <div class="categories-list" id="categoriesList">
+                    <!-- Categories populated by JavaScript -->
+                </div>
+
+                <div class="add-category-form">
+                    <h3>Add New Category</h3>
+                    <div class="form-group">
+                        <label for="newCategoryName">Category Name</label>
+                        <input
+                            type="text"
+                            id="newCategoryName"
+                            placeholder="e.g., Project, Study, Exercise"
+                            maxlength="30"
+                            aria-label="New category name"
+                        >
+                    </div>
+                    <div class="form-group">
+                        <label for="newCategoryColor">Color</label>
+                        <div class="color-picker" id="colorPicker">
+                            <button class="color-option" data-color="#0891b2" style="background-color: #0891b2" aria-label="Blue"></button>
+                            <button class="color-option" data-color="#8b5cf6" style="background-color: #8b5cf6" aria-label="Purple"></button>
+                            <button class="color-option" data-color="#f59e0b" style="background-color: #f59e0b" aria-label="Orange"></button>
+                            <button class="color-option" data-color="#10b981" style="background-color: #10b981" aria-label="Green"></button>
+                            <button class="color-option" data-color="#ec4899" style="background-color: #ec4899" aria-label="Pink"></button>
+                            <button class="color-option" data-color="#ef4444" style="background-color: #ef4444" aria-label="Red"></button>
+                        </div>
+                        <input type="hidden" id="newCategoryColor" value="#0891b2">
+                    </div>
+                    <button class="btn btn-primary" id="addCategoryBtn" aria-label="Add new category">Add Category</button>
+                </div>
+            </div>
+        </div>
+        <!-- End Categories View -->
         </main>
 
         <footer>

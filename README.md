@@ -17,10 +17,22 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 - **Persistent Storage**: Your task history is saved locally and persists across browser sessions
 - **Task Details**: Each entry shows:
   - Task description
-  - Session type (Work/Break)
+  - Session type (Focus/Break)
+  - Category with color-coded badge
   - When it was completed
   - Session duration
 - **Clear History**: Remove all task history when needed
+
+### Category Management
+- **Organize Tasks**: Categorize your work sessions for better tracking
+- **Default Categories**: Comes with "Work" and "Learn" categories pre-configured
+- **Category Selector**: Choose a category when entering tasks (defaults to your preferred category)
+- **Custom Categories**: Create unlimited custom categories with personalized colors
+- **Category Colors**: Choose from 6 pre-defined color options for visual organization
+- **Set Default**: Mark any category as default for quick task entry
+- **Delete Protection**: Prevents deletion of the last category; reassigns tasks when deleting
+- **Visual Feedback**: Color-coded badges in task history for easy identification
+- **Separate Management View**: Dedicated interface for managing all categories
 
 ### User Experience
 - **Clean, Minimal Design**: Focus on what matters - your work
@@ -37,16 +49,28 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 3. That's it! No installation or build process required
 
 ### Using the Timer
-1. **Enter Your Task**: Type what you'll be working on in the input field
-2. **Start Working**: Click the "Start" button to begin your 25-minute work session
-3. **Take Breaks**: When the timer completes, switch to Break mode for a 5-minute rest
-4. **Track Progress**: View your completed sessions in the Task History section
+1. **Select Category**: Choose a category from the dropdown (defaults to your preferred category)
+2. **Enter Your Task**: Type what you'll be working on in the input field
+3. **Start Working**: Click the "Start" button to begin your 25-minute focus session
+4. **Take Breaks**: When the timer completes, switch to Break mode for a 5-minute rest
+5. **Track Progress**: View your completed sessions in the Task History section with category badges
+
+### Managing Categories
+1. **Navigate to Categories**: Click the "Categories" button in the header navigation
+2. **Add New Category**:
+   - Enter a category name (e.g., "Project", "Study", "Exercise")
+   - Select a color from the color picker
+   - Click "Add Category"
+3. **Set Default**: Click "Set Default" on any category to make it the automatic selection
+4. **Delete Category**: Click "Delete" to remove a category (tasks will be reassigned to default)
+5. **Return to Timer**: Click the "Timer" button to continue working
 
 ### Controls
 - **Start/Pause**: Begin or pause the current timer
 - **Reset**: Reset the current session to its full duration
-- **Switch Mode**: Toggle between Work and Break modes
+- **Switch Mode**: Toggle between Focus and Break modes
 - **Clear History**: Remove all saved task history
+- **Timer/Categories**: Navigate between timer and category management views
 
 ## Technologies Used
 
@@ -83,9 +107,10 @@ Learn more: [Wikipedia - Pomodoro Technique](https://en.wikipedia.org/wiki/Pomod
 
 ```
 PomodoroWebApp/
-├── index.html          # Main HTML structure
-├── style.css           # All styling and layout
-├── app.js              # Timer logic and task tracking
+├── index.html          # Main HTML structure with timer and categories views
+├── style.css           # All styling and responsive layout
+├── app.js              # Timer logic, category management, and task tracking
+├── .gitignore          # Git ignore patterns
 └── README.md           # This file
 ```
 
@@ -93,13 +118,14 @@ PomodoroWebApp/
 
 Potential features for future versions:
 - Customizable timer durations
-- Long break intervals after multiple sessions
-- Statistics and analytics
-- Export task history
-- Keyboard shortcuts
-- Dark mode
-- Notification API integration
-- Sound selection
+- Long break intervals after multiple sessions (e.g., 15-30 min after 4 pomodoros)
+- Statistics and analytics dashboard
+- Export task history (CSV/JSON)
+- Category-based time tracking reports
+- Keyboard shortcuts for common actions
+- Dark mode toggle
+- Custom notification sounds
+- Project entity to organize tasks within categories
 
 ## License
 
