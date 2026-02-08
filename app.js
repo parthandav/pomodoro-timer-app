@@ -1,7 +1,7 @@
 // Timer State
-const WORK_DURATION = 25 * 60; // 25 minutes in seconds
+let workDuration = 25 * 60; // Default 25 minutes in seconds
 
-let currentTime = WORK_DURATION;
+let currentTime = workDuration;
 let timerInterval = null;
 let isRunning = false;
 let currentMode = 'work'; // 'work' or 'break'
@@ -28,6 +28,8 @@ const modeIndicator = document.getElementById('modeIndicator');
 const taskInput = document.getElementById('taskInput');
 const taskList = document.getElementById('taskList');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const completionMessage = document.getElementById('completionMessage');
+const durationSelector = document.getElementById('durationSelector');
 
 // Navigation Elements
 const timerNavBtn = document.getElementById('timerNavBtn');
@@ -59,6 +61,7 @@ function init() {
     setupEventListeners();
     setupNavigation();
     setupColorPicker();
+    setupDurationSelector();
     requestNotificationPermission();
     setupVisibilityHandler();
 }
@@ -71,20 +74,31 @@ function requestNotificationPermission() {
 }
 
 // Web Worker for reliable background timer (browsers throttle setInterval in background tabs)
+// Worker sends periodic 'tick' messages so tab title stays updated even when tab is inactive
 function createTimerWorker() {
     const workerCode = `
         let timerId = null;
         self.onmessage = function(e) {
-            if (e.data.type === 'start') {
+            if (e.data.type === 'start-focus') {
                 if (timerId) clearInterval(timerId);
                 const endTime = e.data.endTime;
                 timerId = setInterval(function() {
-                    if (Date.now() >= endTime) {
+                    const remainingMs = endTime - Date.now();
+                    if (remainingMs <= 0) {
                         clearInterval(timerId);
                         timerId = null;
                         self.postMessage({ type: 'complete' });
+                    } else {
+                        self.postMessage({ type: 'tick', remaining: Math.ceil(remainingMs / 1000) });
                     }
-                }, 500);
+                }, 1000);
+            } else if (e.data.type === 'start-break') {
+                if (timerId) clearInterval(timerId);
+                const startTime = e.data.startTime;
+                timerId = setInterval(function() {
+                    const elapsedMs = Date.now() - startTime;
+                    self.postMessage({ type: 'tick', elapsed: Math.floor(elapsedMs / 1000) });
+                }, 1000);
             } else if (e.data.type === 'stop') {
                 if (timerId) {
                     clearInterval(timerId);
@@ -147,6 +161,9 @@ function toggleTimer() {
 }
 
 function startTimer() {
+    // Hide any completion message from previous session
+    completionMessage.classList.add('hidden');
+
     // Validation: Check if task is entered for work mode
     if (currentMode === 'work' && !taskInput.value.trim()) {
         alert('Please enter what you\'re working on before starting the timer!');
@@ -167,6 +184,22 @@ function startTimer() {
         // Hide start/pause button during break (breaks don't pause)
         startPauseBtn.style.display = 'none';
 
+        // Start Web Worker for reliable background tab title updates during break
+        stopTimerWorker();
+        try {
+            timerWorker = createTimerWorker();
+            timerWorker.onmessage = (e) => {
+                if (e.data.type === 'tick') {
+                    currentTime = e.data.elapsed;
+                    updateDisplay();
+                    updateTabTitle();
+                }
+            };
+            timerWorker.postMessage({ type: 'start-break', startTime: breakStartTime });
+        } catch (err) {
+            console.log('Web Worker not available, using fallback timer');
+        }
+
         timerInterval = setInterval(() => {
             const elapsedMs = Date.now() - breakStartTime;
             currentTime = Math.floor(elapsedMs / 1000);
@@ -181,7 +214,7 @@ function startTimer() {
         // Calculate target end time based on current remaining time
         endTime = Date.now() + (currentTime * 1000);
 
-        // Start Web Worker for reliable background completion
+        // Start Web Worker for reliable background timer + tab title updates
         // (browsers throttle setInterval in background tabs, but Workers are not throttled)
         stopTimerWorker();
         try {
@@ -189,9 +222,13 @@ function startTimer() {
             timerWorker.onmessage = (e) => {
                 if (e.data.type === 'complete') {
                     timerComplete();
+                } else if (e.data.type === 'tick') {
+                    currentTime = Math.max(0, e.data.remaining);
+                    updateDisplay();
+                    updateTabTitle();
                 }
             };
-            timerWorker.postMessage({ type: 'start', endTime: endTime });
+            timerWorker.postMessage({ type: 'start-focus', endTime: endTime });
         } catch (err) {
             console.log('Web Worker not available, using fallback timer');
         }
@@ -238,7 +275,7 @@ function resetTimer() {
     endTime = null;
 
     if (currentMode === 'work') {
-        currentTime = WORK_DURATION;
+        currentTime = workDuration;
     } else {
         // Reset break elapsed time to 0 and restart tracking
         currentTime = 0;
@@ -261,6 +298,7 @@ function switchMode() {
         timerDisplay.classList.add('break-mode');
         startPauseBtn.classList.add('break-mode');
         switchModeBtn.textContent = 'Switch to Focus';
+        durationSelector.classList.add('hidden');
 
         // Auto-start break timer immediately
         isBreakActive = true;
@@ -291,13 +329,14 @@ function switchMode() {
 
         // Switch to focus mode
         currentMode = 'work';
-        currentTime = WORK_DURATION;
+        currentTime = workDuration;
         modeIndicator.textContent = 'Focus Mode';
         modeIndicator.classList.remove('break-mode');
         timerDisplay.classList.remove('break-mode');
         startPauseBtn.classList.remove('break-mode');
         startPauseBtn.style.display = ''; // Show start button again
         switchModeBtn.textContent = 'Switch to Break';
+        durationSelector.classList.remove('hidden');
 
         updateDisplay();
         document.title = 'Pomodoro Timer';
@@ -316,19 +355,19 @@ function timerComplete() {
     // Play completion sound
     playCompletionSound();
 
-    // Save focus session to history
+    // Save focus session to history (use endTime as completion timestamp, not now)
     const completedTaskName = taskInput.value.trim() || 'Untitled Task';
-    saveTaskToHistory(completedTaskName, currentMode, WORK_DURATION);
+    saveTaskToHistory(completedTaskName, currentMode, workDuration, endTime);
     taskInput.value = ''; // Clear input after completion
+
+    // Show inline completion message
+    showCompletionMessage(completedTaskName);
 
     // Show browser notification
     showNotification(
         'Focus Complete!',
         `Great job! You completed: ${completedTaskName}`
     );
-
-    // Also show alert as fallback
-    alert('Focus session complete! Great job!');
 
     // Flash the tab title to get attention
     flashTabTitle();
@@ -366,6 +405,16 @@ function updateTabTitle() {
     } else {
         document.title = 'Pomodoro Timer';
     }
+}
+
+function showCompletionMessage(taskName) {
+    completionMessage.textContent = `Focus session complete! Great job on: ${taskName}`;
+    completionMessage.classList.remove('hidden');
+
+    // Auto-hide after 10 seconds
+    setTimeout(() => {
+        completionMessage.classList.add('hidden');
+    }, 10000);
 }
 
 function flashTabTitle() {
@@ -715,6 +764,24 @@ function setupColorPicker() {
     colorOptions[0].classList.add('selected');
 }
 
+function setupDurationSelector() {
+    const buttons = durationSelector.querySelectorAll('.duration-btn');
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (isRunning) return; // Don't change duration while timer is running
+
+            buttons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const minutes = parseInt(btn.dataset.minutes);
+            workDuration = minutes * 60;
+            currentTime = workDuration;
+            updateDisplay();
+        });
+    });
+}
+
 function handleAddCategory() {
     const name = newCategoryName.value.trim();
     const color = newCategoryColor.value || selectedCategoryColor;
@@ -731,13 +798,13 @@ function handleAddCategory() {
 }
 
 // Task Tracking Functions
-function saveTaskToHistory(description, mode, duration) {
+function saveTaskToHistory(description, mode, duration, completedAt) {
     const selectedCategory = getCategoryById(categorySelect.value) || getDefaultCategory();
 
     const task = {
         description: description,
         mode: mode,
-        timestamp: new Date().toISOString(),
+        timestamp: completedAt ? new Date(completedAt).toISOString() : new Date().toISOString(),
         duration: duration,
         category: selectedCategory.id,
         categoryName: selectedCategory.name,
@@ -789,6 +856,17 @@ function saveTasksToLocalStorage() {
     }
 }
 
+function buildTaskSummary(taskArray) {
+    const focusTasks = taskArray.filter(t => t.mode === 'work');
+    const breakTasks = taskArray.filter(t => t.mode === 'break');
+    const focusMins = Math.round(focusTasks.reduce((sum, t) => sum + (t.duration || 0), 0) / 60);
+    const breakMins = Math.round(breakTasks.reduce((sum, t) => sum + (t.duration || 0), 0) / 60);
+    const parts = [];
+    if (focusTasks.length > 0) parts.push(`${focusTasks.length} focus session${focusTasks.length > 1 ? 's' : ''} (${focusMins} min)`);
+    if (breakTasks.length > 0) parts.push(`${breakTasks.length} break${breakTasks.length > 1 ? 's' : ''} (${breakMins} min)`);
+    return parts.join(', ');
+}
+
 function displayTaskHistory() {
     // Only show today's tasks on the Timer page
     const todaysTasks = tasks.filter(task => isToday(task.timestamp));
@@ -799,6 +877,12 @@ function displayTaskHistory() {
     }
 
     taskList.innerHTML = '';
+
+    // Show summary for today
+    const summary = document.createElement('p');
+    summary.className = 'history-summary';
+    summary.textContent = buildTaskSummary(todaysTasks);
+    taskList.appendChild(summary);
 
     todaysTasks.forEach(task => {
         const taskItem = createTaskElement(task);
@@ -944,12 +1028,7 @@ function displayHistoryTasks(dateKey) {
     // Show summary
     const summary = document.createElement('p');
     summary.className = 'history-summary';
-    const focusCount = dateTasks.filter(t => t.mode === 'work').length;
-    const breakCount = dateTasks.filter(t => t.mode === 'break').length;
-    const parts = [];
-    if (focusCount > 0) parts.push(`${focusCount} focus session${focusCount > 1 ? 's' : ''}`);
-    if (breakCount > 0) parts.push(`${breakCount} break${breakCount > 1 ? 's' : ''}`);
-    summary.textContent = parts.join(', ');
+    summary.textContent = buildTaskSummary(dateTasks);
     historyTaskList.appendChild(summary);
 
     // Render tasks

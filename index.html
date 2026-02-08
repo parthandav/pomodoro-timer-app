@@ -24,11 +24,20 @@
             <div class="timer-section">
                 <div class="timer-display" id="timerDisplay">25:00</div>
 
+                <div class="duration-selector" id="durationSelector">
+                    <button class="duration-btn active" data-minutes="25">25m</button>
+                    <button class="duration-btn" data-minutes="30">30m</button>
+                    <button class="duration-btn" data-minutes="45">45m</button>
+                    <button class="duration-btn" data-minutes="50">50m</button>
+                    <button class="duration-btn" data-minutes="60">60m</button>
+                </div>
+
                 <div class="controls">
                     <button class="btn btn-primary" id="startPauseBtn" aria-label="Start or pause timer">Start</button>
                     <button class="btn btn-secondary" id="resetBtn" aria-label="Reset timer">Reset</button>
                     <button class="btn btn-secondary" id="switchModeBtn" aria-label="Switch between focus and break mode">Switch to Break</button>
                 </div>
+                <div class="completion-message hidden" id="completionMessage"></div>
             </div>
 
             <div class="task-section">

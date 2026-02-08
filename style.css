@@ -112,12 +112,61 @@ h1 {
     color: var(--break-primary);
 }
 
+/* Duration Selector */
+.duration-selector {
+    display: flex;
+    gap: var(--spacing-xs);
+    justify-content: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.duration-btn {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: 2px solid var(--border-color);
+    background-color: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+}
+
+.duration-btn:hover {
+    border-color: var(--work-primary);
+    color: var(--work-primary);
+}
+
+.duration-btn.active {
+    background-color: var(--work-primary);
+    color: var(--white);
+    border-color: var(--work-primary);
+}
+
 /* Controls */
 .controls {
     display: flex;
     gap: var(--spacing-sm);
     justify-content: center;
     flex-wrap: wrap;
+}
+
+.completion-message {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background-color: #d1fae5;
+    color: #065f46;
+    border-radius: var(--radius-md);
+    font-weight: 600;
+    font-size: 1rem;
+    text-align: center;
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* Buttons */
@@ -303,7 +352,8 @@ h1 {
     display: block;
 }
 
-.view.hidden {
+.view.hidden,
+.hidden {
     display: none;
 }
 
