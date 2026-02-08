@@ -15,15 +15,17 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 
 ### Task Tracking
 - **Task Input**: Enter what you're working on before starting a session
-- **Session History**: View all completed Pomodoro sessions
+- **Today's Tasks**: Timer page shows only today's completed sessions for a focused view
+- **Task History Page**: Dedicated history view with selectable date chips to browse past days
+- **Date Navigation**: Click any date to see that day's focus sessions and breaks
 - **Persistent Storage**: Your task history is saved locally and persists across browser sessions
 - **Task Details**: Each entry shows:
   - Task description
   - Session type (Focus/Break)
   - Category with color-coded badge
   - When it was completed
-  - Session duration
-- **Clear History**: Remove all task history when needed
+  - Session duration (human-readable: sec, min, h+m)
+- **Clear History**: Remove all task history from either the Timer or History page
 
 ### Category Management
 - **Organize Tasks**: Categorize your work sessions for better tracking
@@ -56,7 +58,13 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 3. **Start Working**: Click the "Start" button to begin your 25-minute focus session
 4. **Take a Break**: When the timer completes, click "Switch to Break" - the break timer auto-starts and counts up
 5. **End Your Break**: When ready to work again, click "Switch to Focus" - you'll be prompted to describe what you did during the break
-6. **Track Progress**: View all focus sessions and breaks in the Task History with actual durations
+6. **Track Progress**: Today's sessions appear under "Today's Tasks" on the Timer page
+
+### Viewing Task History
+1. **Navigate to History**: Click the "History" button in the header navigation
+2. **Browse by Date**: Click a date chip to view that day's tasks
+3. **Auto-Selection**: The most recent past date is automatically selected
+4. **Session Summary**: Each date shows a count of focus sessions and breaks
 
 ### Managing Categories
 1. **Navigate to Categories**: Click the "Categories" button in the header navigation
@@ -74,7 +82,7 @@ A simple, elegant web-based Pomodoro timer to help you stay focused and producti
 - **Switch to Break**: Start an open-ended break with elapsed time tracking
 - **Switch to Focus**: End the current break (prompts for activity) and return to focus mode
 - **Clear History**: Remove all saved task history
-- **Timer/Categories**: Navigate between timer and category management views
+- **Timer/Categories/History**: Navigate between timer, category management, and history views
 
 ## Technologies Used
 

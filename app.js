@@ -12,7 +12,7 @@ let tasks = [];
 
 // Categories State
 let categories = [];
-let currentView = 'timer'; // 'timer' or 'categories'
+let currentView = 'timer'; // 'timer', 'categories', or 'history'
 let selectedCategoryColor = '#0891b2'; // Default blue color
 
 // Predefined category colors
@@ -31,8 +31,15 @@ const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 // Navigation Elements
 const timerNavBtn = document.getElementById('timerNavBtn');
 const categoriesNavBtn = document.getElementById('categoriesNavBtn');
+const historyNavBtn = document.getElementById('historyNavBtn');
 const timerView = document.getElementById('timerView');
 const categoriesView = document.getElementById('categoriesView');
+const historyView = document.getElementById('historyView');
+
+// History Elements
+const dateSelectorBar = document.getElementById('dateSelectorBar');
+const historyTaskList = document.getElementById('historyTaskList');
+const clearAllHistoryBtn = document.getElementById('clearAllHistoryBtn');
 
 // Category Elements
 const categorySelect = document.getElementById('categorySelect');
@@ -371,22 +378,35 @@ function playCompletionSound() {
 function setupNavigation() {
     timerNavBtn.addEventListener('click', () => showView('timer'));
     categoriesNavBtn.addEventListener('click', () => showView('categories'));
+    historyNavBtn.addEventListener('click', () => showView('history'));
+    clearAllHistoryBtn.addEventListener('click', clearTaskHistory);
 }
 
 function showView(viewName) {
     currentView = viewName;
 
+    // Hide all views
+    timerView.classList.add('hidden');
+    categoriesView.classList.add('hidden');
+    historyView.classList.add('hidden');
+
+    // Deactivate all nav buttons
+    timerNavBtn.classList.remove('active');
+    categoriesNavBtn.classList.remove('active');
+    historyNavBtn.classList.remove('active');
+
+    // Show selected view
     if (viewName === 'timer') {
         timerView.classList.remove('hidden');
-        categoriesView.classList.add('hidden');
         timerNavBtn.classList.add('active');
-        categoriesNavBtn.classList.remove('active');
-    } else {
-        timerView.classList.add('hidden');
+    } else if (viewName === 'categories') {
         categoriesView.classList.remove('hidden');
-        timerNavBtn.classList.remove('active');
         categoriesNavBtn.classList.add('active');
         renderCategories();
+    } else if (viewName === 'history') {
+        historyView.classList.remove('hidden');
+        historyNavBtn.classList.add('active');
+        initHistoryView();
     }
 }
 
@@ -691,17 +711,34 @@ function saveTasksToLocalStorage() {
 }
 
 function displayTaskHistory() {
-    if (tasks.length === 0) {
-        taskList.innerHTML = '<p class="empty-state">No tasks completed yet. Start a timer to begin!</p>';
+    // Only show today's tasks on the Timer page
+    const todaysTasks = tasks.filter(task => isToday(task.timestamp));
+
+    if (todaysTasks.length === 0) {
+        taskList.innerHTML = '<p class="empty-state">No tasks completed today. Start a focus session!</p>';
         return;
     }
 
     taskList.innerHTML = '';
 
-    tasks.forEach(task => {
+    todaysTasks.forEach(task => {
         const taskItem = createTaskElement(task);
         taskList.appendChild(taskItem);
     });
+}
+
+// Date Helper Functions
+function isToday(isoString) {
+    const taskDate = new Date(isoString);
+    const now = new Date();
+    return taskDate.getFullYear() === now.getFullYear() &&
+           taskDate.getMonth() === now.getMonth() &&
+           taskDate.getDate() === now.getDate();
+}
+
+function getDateKey(isoString) {
+    const date = new Date(isoString);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function createTaskElement(task) {
@@ -774,6 +811,95 @@ function formatTimestamp(isoString) {
     }
 }
 
+// History View Functions
+function getAvailableDates() {
+    const dateSet = new Set();
+    tasks.forEach(task => {
+        if (!isToday(task.timestamp)) {
+            dateSet.add(getDateKey(task.timestamp));
+        }
+    });
+    // Sort most recent first
+    return Array.from(dateSet).sort((a, b) => b.localeCompare(a));
+}
+
+function initHistoryView() {
+    const dates = getAvailableDates();
+
+    if (dates.length === 0) {
+        dateSelectorBar.innerHTML = '';
+        historyTaskList.innerHTML = '<p class="empty-state">No past task history yet.</p>';
+        return;
+    }
+
+    // Auto-select the most recent past date
+    renderDateSelector(dates, dates[0]);
+    displayHistoryTasks(dates[0]);
+}
+
+function renderDateSelector(dates, selectedDate) {
+    dateSelectorBar.innerHTML = '';
+
+    dates.forEach(dateKey => {
+        const chip = document.createElement('button');
+        chip.className = `date-chip${dateKey === selectedDate ? ' active' : ''}`;
+        chip.textContent = formatDateChip(dateKey);
+        chip.addEventListener('click', () => {
+            renderDateSelector(dates, dateKey);
+            displayHistoryTasks(dateKey);
+        });
+        dateSelectorBar.appendChild(chip);
+    });
+}
+
+function displayHistoryTasks(dateKey) {
+    const dateTasks = tasks.filter(task => getDateKey(task.timestamp) === dateKey);
+
+    historyTaskList.innerHTML = '';
+
+    if (dateTasks.length === 0) {
+        historyTaskList.innerHTML = '<p class="empty-state">No tasks for this date.</p>';
+        return;
+    }
+
+    // Show summary
+    const summary = document.createElement('p');
+    summary.className = 'history-summary';
+    const focusCount = dateTasks.filter(t => t.mode === 'work').length;
+    const breakCount = dateTasks.filter(t => t.mode === 'break').length;
+    const parts = [];
+    if (focusCount > 0) parts.push(`${focusCount} focus session${focusCount > 1 ? 's' : ''}`);
+    if (breakCount > 0) parts.push(`${breakCount} break${breakCount > 1 ? 's' : ''}`);
+    summary.textContent = parts.join(', ');
+    historyTaskList.appendChild(summary);
+
+    // Render tasks
+    dateTasks.forEach(task => {
+        const taskItem = createTaskElement(task);
+        historyTaskList.appendChild(taskItem);
+    });
+}
+
+function formatDateChip(dateKey) {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    const now = new Date();
+
+    // Check if yesterday
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.getFullYear() === yesterday.getFullYear() &&
+        date.getMonth() === yesterday.getMonth() &&
+        date.getDate() === yesterday.getDate()) {
+        return 'Yesterday';
+    }
+
+    // Format as "Day, Mon DD" (e.g., "Thu, Feb 6")
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
+}
+
 function clearTaskHistory() {
     if (tasks.length === 0) {
         return;
@@ -783,6 +909,10 @@ function clearTaskHistory() {
         tasks = [];
         saveTasksToLocalStorage();
         displayTaskHistory();
+        // Also refresh history view if it's visible
+        if (currentView === 'history') {
+            initHistoryView();
+        }
     }
 }
 
