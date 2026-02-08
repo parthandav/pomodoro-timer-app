@@ -8,6 +8,7 @@ let currentMode = 'work'; // 'work' or 'break'
 let endTime = null; // Timestamp when timer should reach 0
 let breakStartTime = null; // Timestamp when break started (for open-ended breaks)
 let isBreakActive = false; // Whether a break is currently in progress
+let timerWorker = null; // Web Worker for background timer (not throttled by browser)
 let tasks = [];
 
 // Categories State
@@ -59,6 +60,7 @@ function init() {
     setupNavigation();
     setupColorPicker();
     requestNotificationPermission();
+    setupVisibilityHandler();
 }
 
 // Request notification permission on page load
@@ -66,6 +68,64 @@ function requestNotificationPermission() {
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
     }
+}
+
+// Web Worker for reliable background timer (browsers throttle setInterval in background tabs)
+function createTimerWorker() {
+    const workerCode = `
+        let timerId = null;
+        self.onmessage = function(e) {
+            if (e.data.type === 'start') {
+                if (timerId) clearInterval(timerId);
+                const endTime = e.data.endTime;
+                timerId = setInterval(function() {
+                    if (Date.now() >= endTime) {
+                        clearInterval(timerId);
+                        timerId = null;
+                        self.postMessage({ type: 'complete' });
+                    }
+                }, 500);
+            } else if (e.data.type === 'stop') {
+                if (timerId) {
+                    clearInterval(timerId);
+                    timerId = null;
+                }
+            }
+        };
+    `;
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    return new Worker(URL.createObjectURL(blob));
+}
+
+function stopTimerWorker() {
+    if (timerWorker) {
+        timerWorker.postMessage({ type: 'stop' });
+        timerWorker.terminate();
+        timerWorker = null;
+    }
+}
+
+// Visibility change handler - catches timer completion when tab becomes visible
+function setupVisibilityHandler() {
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden || !isRunning) return;
+
+        if (currentMode === 'work' && endTime) {
+            const remainingMs = endTime - Date.now();
+            if (remainingMs <= 0) {
+                timerComplete();
+            } else {
+                currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
+                updateDisplay();
+                updateTabTitle();
+            }
+        } else if (currentMode === 'break' && breakStartTime) {
+            const elapsedMs = Date.now() - breakStartTime;
+            currentTime = Math.floor(elapsedMs / 1000);
+            updateDisplay();
+            updateTabTitle();
+        }
+    });
 }
 
 // Event Listeners
@@ -121,6 +181,21 @@ function startTimer() {
         // Calculate target end time based on current remaining time
         endTime = Date.now() + (currentTime * 1000);
 
+        // Start Web Worker for reliable background completion
+        // (browsers throttle setInterval in background tabs, but Workers are not throttled)
+        stopTimerWorker();
+        try {
+            timerWorker = createTimerWorker();
+            timerWorker.onmessage = (e) => {
+                if (e.data.type === 'complete') {
+                    timerComplete();
+                }
+            };
+            timerWorker.postMessage({ type: 'start', endTime: endTime });
+        } catch (err) {
+            console.log('Web Worker not available, using fallback timer');
+        }
+
         timerInterval = setInterval(() => {
             // Calculate remaining time based on actual elapsed time
             const remainingMs = endTime - Date.now();
@@ -139,6 +214,7 @@ function startTimer() {
 function pauseTimer() {
     isRunning = false;
     clearInterval(timerInterval);
+    stopTimerWorker();
 
     if (currentMode === 'work') {
         startPauseBtn.textContent = 'Start';
@@ -231,6 +307,9 @@ function switchMode() {
 function timerComplete() {
     // Breaks never auto-complete - they run until user switches to focus
     if (currentMode === 'break') return;
+
+    // Guard against double-firing (Worker + interval can both trigger this)
+    if (!isRunning && currentTime > 0) return;
 
     pauseTimer();
 
