@@ -977,3 +977,123 @@ footer a:hover {
         max-height: 300px;
     }
 }
+
+/* ── Sign-in Overlay ──────────────────────────────────────────────────────── */
+
+.signin-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(17, 24, 39, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.signin-card {
+    background: var(--white);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-xl);
+    max-width: 420px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.signin-logo {
+    font-size: 4rem;
+    margin-bottom: var(--spacing-sm);
+}
+
+.signin-card h2 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.signin-card p {
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-lg);
+    font-size: 0.9375rem;
+}
+
+.btn-google-signin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    width: 100%;
+    padding: 0.75rem 1.5rem;
+    background: var(--white);
+    color: #3c4043;
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: inherit;
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: var(--transition);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.btn-google-signin:hover {
+    background-color: #f8f9fa;
+    border-color: #c6c6c6;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.google-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.signin-note {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin-top: var(--spacing-sm);
+    margin-bottom: 0;
+}
+
+/* ── User Profile in Nav ─────────────────────────────────────────────────── */
+
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-sm);
+    justify-content: center;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--border-color);
+}
+
+.user-name {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-sign-out {
+    font-size: 0.8125rem;
+    padding: 0.25rem 0.625rem;
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+}
+
+.btn-sign-out:hover {
+    color: #ef4444;
+    border-color: #ef4444;
+    background-color: #fef2f2;
+}

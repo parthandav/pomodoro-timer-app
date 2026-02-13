@@ -1,3 +1,12 @@
+// Firebase setup (compat SDK loaded via index.html)
+// firebase.initializeApp is called here after firebase-config.js is loaded
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// Current signed-in user (null when not authenticated)
+let currentUser = null;
+
 // Timer State
 let workDuration = 25 * 60; // Default 25 minutes in seconds
 
@@ -10,6 +19,7 @@ let breakStartTime = null; // Timestamp when break started (for open-ended break
 let isBreakActive = false; // Whether a break is currently in progress
 let timerWorker = null; // Web Worker for background timer (not throttled by browser)
 let completionTimeout = null; // Safety setTimeout for timer completion in frozen tabs
+let swRegistration = null; // Service Worker registration for OS-level timer notifications
 let tasks = [];
 
 // Categories State
@@ -68,29 +78,186 @@ const projectSelector = document.getElementById('projectSelector');
 const projectFavourites = document.getElementById('projectFavourites');
 const projectSelect = document.getElementById('projectSelect');
 
-// Initialize app
+// Initialize app — sets up event listeners and Firebase auth.
+// Data loading happens inside loadUserData() after sign-in.
 function init() {
-    // Core timer infrastructure first (must not be blocked by UI errors)
-    loadCategories();
-    loadProjects();
-    loadTaskHistory();
-    updateDisplay();
-    renderCategorySelector();
+    registerServiceWorker();
     setupEventListeners();
     setupNavigation();
     setupColorPicker();
     setupDurationSelector();
     requestNotificationPermission();
     setupVisibilityHandler();
+    setupProjectListeners();
+    initFirebaseAuth();
+}
 
-    // Project UI setup last (non-critical for timer operation)
+// Register Service Worker and listen for timer-complete messages from it
+function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('/sw.js')
+        .then((registration) => {
+            swRegistration = registration;
+        })
+        .catch((err) => {
+            console.log('Service Worker registration failed:', err);
+        });
+
+    // When SW fires timer-complete (e.g. notification arrived while tab was hidden),
+    // ensure the timer state is updated in the main thread too.
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'timer-complete') {
+            if (isRunning && currentMode === 'work') {
+                timerComplete();
+            }
+        }
+    });
+}
+
+// Post a message to the active Service Worker (if available)
+function postToSW(message) {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active) {
+            registration.active.postMessage(message);
+        }
+    }).catch(() => {});
+}
+
+// ─── Firebase Auth ────────────────────────────────────────────────────────────
+
+function initFirebaseAuth() {
+    document.getElementById('googleSignInBtn').addEventListener('click', handleSignIn);
+    document.getElementById('signOutBtn').addEventListener('click', handleSignOut);
+
+    auth.onAuthStateChanged(async (user) => {
+        if (user) {
+            await loadUserData(user);
+            document.getElementById('signinOverlay').style.display = 'none';
+        } else {
+            showSignIn();
+        }
+    });
+}
+
+async function handleSignIn() {
+    const provider = new firebase.auth.GoogleAuthProvider();
     try {
-        renderProjectSelector();
-        setupProjectListeners();
+        await auth.signInWithPopup(provider);
     } catch (err) {
-        console.error('Error setting up project UI:', err);
+        if (err.code !== 'auth/popup-closed-by-user') {
+            alert('Sign-in failed: ' + err.message);
+        }
     }
 }
+
+async function handleSignOut() {
+    if (isRunning) {
+        if (!confirm('A timer is running. Sign out anyway?')) return;
+        pauseTimer();
+    }
+    await auth.signOut();
+    currentUser = null;
+    tasks = [];
+    categories = [];
+    projects = [];
+    selectedProjectId = null;
+}
+
+function showSignIn() {
+    document.getElementById('signinOverlay').style.display = 'flex';
+    document.getElementById('userProfile').style.display = 'none';
+}
+
+async function loadUserData(user) {
+    currentUser = user;
+
+    // Update user profile chip in header
+    const userProfile = document.getElementById('userProfile');
+    const userAvatar = document.getElementById('userAvatar');
+    const userName = document.getElementById('userName');
+    userProfile.style.display = 'flex';
+    userAvatar.src = user.photoURL || '';
+    userAvatar.alt = user.displayName || 'User';
+    userName.textContent = user.displayName || user.email;
+
+    // Load all user data from Firestore
+    await loadCategories();
+    await loadProjects();
+    await loadTaskHistory();
+
+    // Render UI with loaded data
+    updateDisplay();
+    renderCategorySelector();
+    renderProjectSelector();
+
+    // Offer one-time migration from localStorage (for existing users)
+    await offerLocalStorageMigration();
+}
+
+// Migrate localStorage data into Firestore the first time a user signs in
+async function offerLocalStorageMigration() {
+    const localTasks = localStorage.getItem('pomodoroTasks');
+    const localCategories = localStorage.getItem('pomodoroCategories');
+
+    if (!localTasks && !localCategories) return; // Nothing to migrate
+    if (tasks.length > 0 || categories.length > 2) return; // Firestore already has real data
+
+    const doImport = confirm(
+        'We found existing data on this device (tasks and categories from before sign-in). ' +
+        'Import it into your account?'
+    );
+    if (!doImport) {
+        localStorage.removeItem('pomodoroTasks');
+        localStorage.removeItem('pomodoroCategories');
+        localStorage.removeItem('pomodoroProjects');
+        return;
+    }
+
+    // Import categories
+    if (localCategories) {
+        try {
+            const localCats = JSON.parse(localCategories);
+            if (localCats.length > 0) {
+                // Merge: add any local categories not already in Firestore
+                const firestoreNames = new Set(categories.map(c => c.name.toLowerCase()));
+                localCats.forEach(cat => {
+                    if (!firestoreNames.has(cat.name.toLowerCase())) {
+                        categories.push(cat);
+                    }
+                });
+                await saveCategories();
+                renderCategorySelector();
+            }
+        } catch (e) { /* ignore parse errors */ }
+    }
+
+    // Import tasks
+    if (localTasks) {
+        try {
+            const localTaskArray = JSON.parse(localTasks);
+            const batch = db.batch();
+            localTaskArray.forEach(task => {
+                if (!task.id) task.id = generateId();
+                const ref = db.collection(`users/${currentUser.uid}/tasks`).doc(task.id);
+                batch.set(ref, task);
+            });
+            await batch.commit();
+            tasks = [...localTaskArray, ...tasks].sort(
+                (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+            );
+            displayTaskHistory();
+        } catch (e) { /* ignore */ }
+    }
+
+    // Clear localStorage after successful migration
+    localStorage.removeItem('pomodoroTasks');
+    localStorage.removeItem('pomodoroCategories');
+    localStorage.removeItem('pomodoroProjects');
+}
+
+// ─── End Firebase Auth ────────────────────────────────────────────────────────
 
 // Request notification permission on page load
 function requestNotificationPermission() {
@@ -293,6 +460,15 @@ function startTimer() {
                 timerComplete();
             }
         }, currentTime * 1000 + 500);
+
+        // Schedule OS-level notification via Service Worker.
+        // The SW runs independently of the tab's event loop, so the notification
+        // fires at the correct time even when the tab is throttled in the background.
+        postToSW({
+            type: 'schedule-completion',
+            endTime: endTime,
+            taskName: taskInput.value.trim()
+        });
     }
 }
 
@@ -308,6 +484,7 @@ function pauseTimer() {
     clearInterval(timerInterval);
     stopTimerWorker();
     clearCompletionTimeout();
+    postToSW({ type: 'cancel-completion' });
 
     if (currentMode === 'work') {
         startPauseBtn.textContent = 'Start';
@@ -603,34 +780,34 @@ function showView(viewName) {
 }
 
 // Category Management Functions
-function loadCategories() {
-    const storedCategories = localStorage.getItem('pomodoroCategories');
-    if (storedCategories) {
-        try {
-            categories = JSON.parse(storedCategories);
-        } catch (error) {
-            console.error('Error loading categories:', error);
-            createDefaultCategories();
+async function loadCategories() {
+    if (!currentUser) return;
+    try {
+        const snap = await db.doc(`users/${currentUser.uid}/data/categories`).get();
+        if (snap.exists && snap.data().categories && snap.data().categories.length > 0) {
+            categories = snap.data().categories;
+        } else {
+            await createDefaultCategories();
         }
-    } else {
-        createDefaultCategories();
+    } catch (err) {
+        console.error('Error loading categories:', err);
+        if (categories.length === 0) await createDefaultCategories();
     }
 }
 
-function createDefaultCategories() {
+async function createDefaultCategories() {
     categories = [
         { id: generateId(), name: 'Work', isDefault: true, color: '#0891b2' },
         { id: generateId(), name: 'Learn', isDefault: false, color: '#8b5cf6' }
     ];
-    saveCategories();
+    await saveCategories();
 }
 
 function saveCategories() {
-    try {
-        localStorage.setItem('pomodoroCategories', JSON.stringify(categories));
-    } catch (error) {
-        console.error('Error saving categories:', error);
-    }
+    if (!currentUser) return Promise.resolve();
+    return db.doc(`users/${currentUser.uid}/data/categories`)
+        .set({ categories })
+        .catch(err => console.error('Error saving categories:', err));
 }
 
 function generateId() {
@@ -702,7 +879,7 @@ function deleteCategory(id) {
                 task.categoryName = defaultCat.name;
             }
         });
-        saveTasksToLocalStorage();
+        saveAllTasksToFirestore();
         displayTaskHistory();
     }
 
@@ -877,24 +1054,26 @@ function handleAddCategory() {
 }
 
 // Project Management Functions
-function loadProjects() {
-    const storedProjects = localStorage.getItem('pomodoroProjects');
-    if (storedProjects) {
-        try {
-            projects = JSON.parse(storedProjects);
-        } catch (error) {
-            console.error('Error loading projects:', error);
+async function loadProjects() {
+    if (!currentUser) return;
+    try {
+        const snap = await db.doc(`users/${currentUser.uid}/data/projects`).get();
+        if (snap.exists && snap.data().projects) {
+            projects = snap.data().projects;
+        } else {
             projects = [];
         }
+    } catch (err) {
+        console.error('Error loading projects:', err);
+        projects = [];
     }
 }
 
 function saveProjects() {
-    try {
-        localStorage.setItem('pomodoroProjects', JSON.stringify(projects));
-    } catch (error) {
-        console.error('Error saving projects:', error);
-    }
+    if (!currentUser) return Promise.resolve();
+    return db.doc(`users/${currentUser.uid}/data/projects`)
+        .set({ projects })
+        .catch(err => console.error('Error saving projects:', err));
 }
 
 function getProjectById(id) {
@@ -953,7 +1132,7 @@ function deleteProject(id) {
                 task.projectName = null;
             }
         });
-        saveTasksToLocalStorage();
+        saveAllTasksToFirestore();
         displayTaskHistory();
     }
 
@@ -1192,6 +1371,7 @@ function saveTaskToHistory(description, mode, duration, completedAt) {
     const selectedProject = (mode !== 'break' && selectedProjectId) ? getProjectById(selectedProjectId) : null;
 
     const task = {
+        id: generateId(),
         description: description,
         mode: mode,
         timestamp: completedAt ? new Date(completedAt).toISOString() : new Date().toISOString(),
@@ -1203,55 +1383,43 @@ function saveTaskToHistory(description, mode, duration, completedAt) {
         projectName: selectedProject ? selectedProject.name : null
     };
 
-    tasks.unshift(task); // Add to beginning of array
-    saveTasksToLocalStorage();
+    tasks.unshift(task); // Add to beginning of in-memory array (immediate UI update)
+    saveTaskToFirestore(task); // Persist to Firestore (async, fire-and-forget)
     displayTaskHistory();
 }
 
-function loadTaskHistory() {
-    const storedTasks = localStorage.getItem('pomodoroTasks');
-    if (storedTasks) {
-        try {
-            tasks = JSON.parse(storedTasks);
-            migrateTasksToCategories();
-            displayTaskHistory();
-        } catch (error) {
-            console.error('Error loading tasks from localStorage:', error);
-            tasks = [];
-        }
-    }
-}
-
-function migrateTasksToCategories() {
-    let needsSave = false;
-    const defaultCat = getDefaultCategory();
-
-    tasks.forEach(task => {
-        if (!task.category || !task.categoryName) {
-            task.category = defaultCat.id;
-            task.categoryName = defaultCat.name;
-            task.categoryColor = defaultCat.color;
-            needsSave = true;
-        }
-        // Migrate old tasks without project fields
-        if (task.projectId === undefined) {
-            task.projectId = null;
-            task.projectName = null;
-            needsSave = true;
-        }
-    });
-
-    if (needsSave) {
-        saveTasksToLocalStorage();
-    }
-}
-
-function saveTasksToLocalStorage() {
+async function loadTaskHistory() {
+    if (!currentUser) return;
     try {
-        localStorage.setItem('pomodoroTasks', JSON.stringify(tasks));
-    } catch (error) {
-        console.error('Error saving tasks to localStorage:', error);
+        const snap = await db.collection(`users/${currentUser.uid}/tasks`)
+            .orderBy('timestamp', 'desc')
+            .get();
+        tasks = snap.docs.map(d => d.data());
+        displayTaskHistory();
+    } catch (err) {
+        console.error('Error loading tasks:', err);
+        tasks = [];
     }
+}
+
+function saveTaskToFirestore(task) {
+    if (!currentUser || !task.id) return;
+    db.collection(`users/${currentUser.uid}/tasks`)
+        .doc(task.id)
+        .set(task)
+        .catch(err => console.error('Error saving task:', err));
+}
+
+// Used when tasks are bulk-modified (e.g. category reassignment after delete)
+function saveAllTasksToFirestore() {
+    if (!currentUser) return;
+    const batch = db.batch();
+    tasks.forEach(task => {
+        if (!task.id) task.id = generateId();
+        const ref = db.collection(`users/${currentUser.uid}/tasks`).doc(task.id);
+        batch.set(ref, task);
+    });
+    batch.commit().catch(err => console.error('Error in bulk task save:', err));
 }
 
 function buildTaskSummary(taskArray) {
@@ -1467,14 +1635,24 @@ function formatDateChip(dateKey) {
     return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
 }
 
-function clearTaskHistory() {
+async function clearTaskHistory() {
     if (tasks.length === 0) {
         return;
     }
 
     if (confirm('Are you sure you want to clear all task history? This cannot be undone.')) {
+        // Delete all task docs from Firestore
+        if (currentUser) {
+            try {
+                const snap = await db.collection(`users/${currentUser.uid}/tasks`).get();
+                const batch = db.batch();
+                snap.docs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+            } catch (err) {
+                console.error('Error clearing tasks from Firestore:', err);
+            }
+        }
         tasks = [];
-        saveTasksToLocalStorage();
         displayTaskHistory();
         // Also refresh history view if it's visible
         if (currentView === 'history') {
