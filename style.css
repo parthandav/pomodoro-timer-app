@@ -585,6 +585,198 @@ h1 {
     align-items: center;
 }
 
+/* Project Selector (Timer Page) */
+.project-selector {
+    margin-bottom: var(--spacing-lg);
+}
+
+.project-selector > label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.optional-label {
+    font-weight: 400;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.project-favourites {
+    display: flex;
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+    margin-bottom: var(--spacing-xs);
+}
+
+.project-chip {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: 2px solid var(--border-color);
+    background-color: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+}
+
+.project-chip:hover {
+    border-color: var(--work-primary);
+    color: var(--work-primary);
+}
+
+.project-chip.selected {
+    color: var(--white);
+}
+
+#projectSelect {
+    width: 100%;
+    padding: var(--spacing-sm);
+    font-size: 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    background-color: var(--white);
+}
+
+#projectSelect:focus {
+    outline: none;
+    border-color: var(--work-primary);
+    box-shadow: 0 0 0 3px var(--work-bg);
+}
+
+/* Projects Section (Management Page) */
+.projects-section {
+    background-color: var(--white);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-xl);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.projects-section h2 {
+    font-size: 1.75rem;
+    margin-bottom: var(--spacing-lg);
+    color: var(--text-primary);
+}
+
+.projects-section h3 {
+    font-size: 1.25rem;
+    margin-bottom: var(--spacing-md);
+    color: var(--text-primary);
+}
+
+.projects-list {
+    margin-bottom: var(--spacing-xl);
+}
+
+.project-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-sm);
+    background-color: var(--bg-color);
+    border-radius: var(--radius-md);
+    border-left: 4px solid;
+    transition: var(--transition);
+}
+
+.project-card:hover {
+    background-color: var(--border-color);
+}
+
+.project-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+.project-name {
+    font-weight: 600;
+    font-size: 1.125rem;
+    color: var(--text-primary);
+}
+
+.project-badges {
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: center;
+}
+
+.project-category-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--white);
+}
+
+.current-badge {
+    padding: 0.25rem 0.5rem;
+    background-color: #dbeafe;
+    color: #1d4ed8;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.favourite-badge {
+    padding: 0.25rem 0.5rem;
+    background-color: #fef3c7;
+    color: #b45309;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.project-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+/* Add Project Form */
+.add-project-form {
+    padding-top: var(--spacing-lg);
+    border-top: 2px solid var(--border-color);
+}
+
+.add-project-form select {
+    width: 100%;
+    padding: var(--spacing-sm);
+    font-size: 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    background-color: var(--white);
+}
+
+.add-project-form select:focus {
+    outline: none;
+    border-color: var(--work-primary);
+    box-shadow: 0 0 0 3px var(--work-bg);
+}
+
+/* Task Project Badge */
+.task-project-badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1.5px solid;
+    background-color: transparent;
+}
+
 /* History Section */
 .history-section {
     background-color: var(--white);
@@ -717,6 +909,7 @@ footer a:hover {
     .timer-section,
     .task-section,
     .categories-section,
+    .projects-section,
     .history-section {
         padding: var(--spacing-md);
     }
@@ -748,13 +941,15 @@ footer a:hover {
         flex: 1;
     }
 
-    .category-card {
+    .category-card,
+    .project-card {
         flex-direction: column;
         align-items: flex-start;
         gap: var(--spacing-sm);
     }
 
-    .category-actions {
+    .category-actions,
+    .project-actions {
         width: 100%;
         justify-content: flex-end;
     }

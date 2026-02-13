@@ -9,12 +9,17 @@ let endTime = null; // Timestamp when timer should reach 0
 let breakStartTime = null; // Timestamp when break started (for open-ended breaks)
 let isBreakActive = false; // Whether a break is currently in progress
 let timerWorker = null; // Web Worker for background timer (not throttled by browser)
+let completionTimeout = null; // Safety setTimeout for timer completion in frozen tabs
 let tasks = [];
 
 // Categories State
 let categories = [];
-let currentView = 'timer'; // 'timer', 'categories', or 'history'
+let currentView = 'timer'; // 'timer', 'categories', 'projects', or 'history'
 let selectedCategoryColor = '#0891b2'; // Default blue color
+
+// Projects State
+let projects = [];
+let selectedProjectId = null;
 
 // Predefined category colors
 const CATEGORY_COLORS = ['#0891b2', '#8b5cf6', '#f59e0b', '#10b981', '#ec4899', '#ef4444'];
@@ -34,9 +39,11 @@ const durationSelector = document.getElementById('durationSelector');
 // Navigation Elements
 const timerNavBtn = document.getElementById('timerNavBtn');
 const categoriesNavBtn = document.getElementById('categoriesNavBtn');
+const projectsNavBtn = document.getElementById('projectsNavBtn');
 const historyNavBtn = document.getElementById('historyNavBtn');
 const timerView = document.getElementById('timerView');
 const categoriesView = document.getElementById('categoriesView');
+const projectsView = document.getElementById('projectsView');
 const historyView = document.getElementById('historyView');
 
 // History Elements
@@ -52,9 +59,20 @@ const newCategoryColor = document.getElementById('newCategoryColor');
 const addCategoryBtn = document.getElementById('addCategoryBtn');
 const colorPicker = document.getElementById('colorPicker');
 
+// Project Elements
+const projectsList = document.getElementById('projectsList');
+const newProjectName = document.getElementById('newProjectName');
+const newProjectCategory = document.getElementById('newProjectCategory');
+const addProjectBtn = document.getElementById('addProjectBtn');
+const projectSelector = document.getElementById('projectSelector');
+const projectFavourites = document.getElementById('projectFavourites');
+const projectSelect = document.getElementById('projectSelect');
+
 // Initialize app
 function init() {
+    // Core timer infrastructure first (must not be blocked by UI errors)
     loadCategories();
+    loadProjects();
     loadTaskHistory();
     updateDisplay();
     renderCategorySelector();
@@ -64,6 +82,14 @@ function init() {
     setupDurationSelector();
     requestNotificationPermission();
     setupVisibilityHandler();
+
+    // Project UI setup last (non-critical for timer operation)
+    try {
+        renderProjectSelector();
+        setupProjectListeners();
+    } catch (err) {
+        console.error('Error setting up project UI:', err);
+    }
 }
 
 // Request notification permission on page load
@@ -78,15 +104,29 @@ function requestNotificationPermission() {
 function createTimerWorker() {
     const workerCode = `
         let timerId = null;
+        let completionTimer = null;
         self.onmessage = function(e) {
             if (e.data.type === 'start-focus') {
                 if (timerId) clearInterval(timerId);
+                if (completionTimer) clearTimeout(completionTimer);
                 const endTime = e.data.endTime;
+                const delay = endTime - Date.now();
+
+                // Dedicated timeout for exact completion (more reliable than interval alone)
+                if (delay > 0) {
+                    completionTimer = setTimeout(function() {
+                        if (timerId) { clearInterval(timerId); timerId = null; }
+                        self.postMessage({ type: 'complete' });
+                    }, delay + 100);
+                }
+
+                // Interval for tick updates + completion check
                 timerId = setInterval(function() {
                     const remainingMs = endTime - Date.now();
                     if (remainingMs <= 0) {
                         clearInterval(timerId);
                         timerId = null;
+                        if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
                         self.postMessage({ type: 'complete' });
                     } else {
                         self.postMessage({ type: 'tick', remaining: Math.ceil(remainingMs / 1000) });
@@ -94,16 +134,15 @@ function createTimerWorker() {
                 }, 1000);
             } else if (e.data.type === 'start-break') {
                 if (timerId) clearInterval(timerId);
+                if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
                 const startTime = e.data.startTime;
                 timerId = setInterval(function() {
                     const elapsedMs = Date.now() - startTime;
                     self.postMessage({ type: 'tick', elapsed: Math.floor(elapsedMs / 1000) });
                 }, 1000);
             } else if (e.data.type === 'stop') {
-                if (timerId) {
-                    clearInterval(timerId);
-                    timerId = null;
-                }
+                if (timerId) { clearInterval(timerId); timerId = null; }
+                if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
             }
         };
     `;
@@ -205,7 +244,7 @@ function startTimer() {
             currentTime = Math.floor(elapsedMs / 1000);
             updateDisplay();
             updateTabTitle();
-        }, 100);
+        }, 1000);
     } else {
         // Focus mode: count DOWN (remaining time)
         startPauseBtn.textContent = 'Pause';
@@ -244,7 +283,23 @@ function startTimer() {
             if (currentTime <= 0) {
                 timerComplete();
             }
-        }, 100);
+        }, 1000);
+
+        // Safety setTimeout for exact completion time
+        // Browsers may honor a one-shot timeout better than intervals for background tabs
+        clearCompletionTimeout();
+        completionTimeout = setTimeout(() => {
+            if (isRunning && currentMode === 'work') {
+                timerComplete();
+            }
+        }, currentTime * 1000 + 500);
+    }
+}
+
+function clearCompletionTimeout() {
+    if (completionTimeout) {
+        clearTimeout(completionTimeout);
+        completionTimeout = null;
     }
 }
 
@@ -252,6 +307,7 @@ function pauseTimer() {
     isRunning = false;
     clearInterval(timerInterval);
     stopTimerWorker();
+    clearCompletionTimeout();
 
     if (currentMode === 'work') {
         startPauseBtn.textContent = 'Start';
@@ -506,6 +562,7 @@ function playCompletionSound() {
 function setupNavigation() {
     timerNavBtn.addEventListener('click', () => showView('timer'));
     categoriesNavBtn.addEventListener('click', () => showView('categories'));
+    projectsNavBtn.addEventListener('click', () => showView('projects'));
     historyNavBtn.addEventListener('click', () => showView('history'));
     clearAllHistoryBtn.addEventListener('click', clearTaskHistory);
 }
@@ -516,11 +573,13 @@ function showView(viewName) {
     // Hide all views
     timerView.classList.add('hidden');
     categoriesView.classList.add('hidden');
+    projectsView.classList.add('hidden');
     historyView.classList.add('hidden');
 
     // Deactivate all nav buttons
     timerNavBtn.classList.remove('active');
     categoriesNavBtn.classList.remove('active');
+    projectsNavBtn.classList.remove('active');
     historyNavBtn.classList.remove('active');
 
     // Show selected view
@@ -531,6 +590,11 @@ function showView(viewName) {
         categoriesView.classList.remove('hidden');
         categoriesNavBtn.classList.add('active');
         renderCategories();
+    } else if (viewName === 'projects') {
+        projectsView.classList.remove('hidden');
+        projectsNavBtn.classList.add('active');
+        renderProjects();
+        renderNewProjectCategoryDropdown();
     } else if (viewName === 'history') {
         historyView.classList.remove('hidden');
         historyNavBtn.classList.add('active');
@@ -650,6 +714,21 @@ function deleteCategory(id) {
 
     categories = categories.filter(cat => cat.id !== id);
     saveCategories();
+
+    // Reassign projects that referenced the deleted category to the new default
+    const newDefault = getDefaultCategory();
+    let projectsUpdated = false;
+    projects.forEach(project => {
+        if (project.categoryId === id) {
+            project.categoryId = newDefault.id;
+            projectsUpdated = true;
+        }
+    });
+    if (projectsUpdated) {
+        saveProjects();
+        renderProjectSelector();
+    }
+
     renderCategories();
     renderCategorySelector();
 
@@ -797,9 +876,320 @@ function handleAddCategory() {
     }
 }
 
+// Project Management Functions
+function loadProjects() {
+    const storedProjects = localStorage.getItem('pomodoroProjects');
+    if (storedProjects) {
+        try {
+            projects = JSON.parse(storedProjects);
+        } catch (error) {
+            console.error('Error loading projects:', error);
+            projects = [];
+        }
+    }
+}
+
+function saveProjects() {
+    try {
+        localStorage.setItem('pomodoroProjects', JSON.stringify(projects));
+    } catch (error) {
+        console.error('Error saving projects:', error);
+    }
+}
+
+function getProjectById(id) {
+    return projects.find(p => p.id === id);
+}
+
+function addProject(name, categoryId) {
+    if (!name || !name.trim()) {
+        alert('Please enter a project name');
+        return false;
+    }
+
+    if (projects.some(p => p.name.toLowerCase() === name.trim().toLowerCase())) {
+        alert('A project with this name already exists');
+        return false;
+    }
+
+    const category = getCategoryById(categoryId);
+    if (!category) {
+        alert('Please select a valid category');
+        return false;
+    }
+
+    const newProject = {
+        id: generateId(),
+        name: name.trim(),
+        categoryId: categoryId,
+        isCurrent: true,
+        isFavourite: false
+    };
+
+    projects.push(newProject);
+    saveProjects();
+    renderProjects();
+    renderProjectSelector();
+    return true;
+}
+
+function deleteProject(id) {
+    const project = getProjectById(id);
+    if (!project) return false;
+
+    const affectedTasks = tasks.filter(task => task.projectId === id);
+    let confirmMsg = `Are you sure you want to delete "${project.name}"?`;
+    if (affectedTasks.length > 0) {
+        confirmMsg += `\n\n${affectedTasks.length} task(s) will have their project cleared.`;
+    }
+
+    if (!confirm(confirmMsg)) return false;
+
+    // Clear project from tasks
+    if (affectedTasks.length > 0) {
+        tasks.forEach(task => {
+            if (task.projectId === id) {
+                task.projectId = null;
+                task.projectName = null;
+            }
+        });
+        saveTasksToLocalStorage();
+        displayTaskHistory();
+    }
+
+    // Clear selection if this project was selected
+    if (selectedProjectId === id) {
+        selectedProjectId = null;
+    }
+
+    projects = projects.filter(p => p.id !== id);
+    saveProjects();
+    renderProjects();
+    renderProjectSelector();
+    return true;
+}
+
+function toggleProjectCurrent(id) {
+    const project = getProjectById(id);
+    if (!project) return;
+
+    project.isCurrent = !project.isCurrent;
+    // If no longer current, also clear favourite
+    if (!project.isCurrent) {
+        project.isFavourite = false;
+    }
+
+    // Clear selection if this project is no longer current
+    if (!project.isCurrent && selectedProjectId === id) {
+        selectedProjectId = null;
+    }
+
+    saveProjects();
+    renderProjects();
+    renderProjectSelector();
+}
+
+function toggleProjectFavourite(id) {
+    const project = getProjectById(id);
+    if (!project) return;
+
+    project.isFavourite = !project.isFavourite;
+    // If marking as favourite, ensure it's also current
+    if (project.isFavourite) {
+        project.isCurrent = true;
+    }
+
+    saveProjects();
+    renderProjects();
+    renderProjectSelector();
+}
+
+// Project UI Functions
+function renderProjects() {
+    if (projects.length === 0) {
+        projectsList.innerHTML = '<p class="empty-state">No projects yet. Add one below!</p>';
+        return;
+    }
+
+    projectsList.innerHTML = '';
+
+    projects.forEach(project => {
+        const category = getCategoryById(project.categoryId);
+        const categoryColor = category ? category.color : '#0891b2';
+        const categoryName = category ? category.name : 'Unknown';
+
+        const card = document.createElement('div');
+        card.className = 'project-card';
+        card.style.borderLeftColor = categoryColor;
+
+        const info = document.createElement('div');
+        info.className = 'project-info';
+
+        const name = document.createElement('div');
+        name.className = 'project-name';
+        name.textContent = project.name;
+
+        const catBadge = document.createElement('span');
+        catBadge.className = 'project-category-badge';
+        catBadge.textContent = categoryName;
+        catBadge.style.backgroundColor = categoryColor;
+
+        info.appendChild(name);
+        info.appendChild(catBadge);
+
+        const badges = document.createElement('div');
+        badges.className = 'project-badges';
+
+        if (project.isCurrent) {
+            const currentBadge = document.createElement('span');
+            currentBadge.className = 'current-badge';
+            currentBadge.textContent = 'Current';
+            badges.appendChild(currentBadge);
+        }
+        if (project.isFavourite) {
+            const favBadge = document.createElement('span');
+            favBadge.className = 'favourite-badge';
+            favBadge.textContent = 'Favourite';
+            badges.appendChild(favBadge);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'project-actions';
+
+        const toggleCurrentBtn = document.createElement('button');
+        toggleCurrentBtn.className = 'btn btn-small btn-icon';
+        toggleCurrentBtn.textContent = project.isCurrent ? 'Archive' : 'Set Current';
+        toggleCurrentBtn.onclick = () => toggleProjectCurrent(project.id);
+        actions.appendChild(toggleCurrentBtn);
+
+        const toggleFavBtn = document.createElement('button');
+        toggleFavBtn.className = 'btn btn-small btn-icon';
+        toggleFavBtn.textContent = project.isFavourite ? 'Unfavourite' : 'Favourite';
+        toggleFavBtn.onclick = () => toggleProjectFavourite(project.id);
+        actions.appendChild(toggleFavBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-small btn-icon';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.onclick = () => deleteProject(project.id);
+        actions.appendChild(deleteBtn);
+
+        card.appendChild(info);
+        card.appendChild(badges);
+        card.appendChild(actions);
+
+        projectsList.appendChild(card);
+    });
+}
+
+function renderNewProjectCategoryDropdown() {
+    newProjectCategory.innerHTML = '';
+    categories.forEach(category => {
+        const option = document.createElement('option');
+        option.value = category.id;
+        option.textContent = category.name;
+        newProjectCategory.appendChild(option);
+    });
+}
+
+function renderProjectSelector() {
+    // Render favourite project chips
+    const favourites = projects.filter(p => p.isFavourite);
+    projectFavourites.innerHTML = '';
+
+    favourites.forEach(project => {
+        const category = getCategoryById(project.categoryId);
+        const categoryColor = category ? category.color : '#0891b2';
+
+        const chip = document.createElement('button');
+        chip.className = 'project-chip';
+        chip.textContent = project.name;
+        chip.dataset.projectId = project.id;
+        chip.style.borderColor = categoryColor;
+
+        if (selectedProjectId === project.id) {
+            chip.classList.add('selected');
+            chip.style.backgroundColor = categoryColor;
+            chip.style.borderColor = categoryColor;
+        }
+
+        chip.addEventListener('click', () => {
+            if (selectedProjectId === project.id) {
+                // Deselect
+                selectedProjectId = null;
+                projectSelect.value = '';
+            } else {
+                // Select this project
+                selectedProjectId = project.id;
+                projectSelect.value = '';
+                // Auto-fill category
+                if (project.categoryId) {
+                    categorySelect.value = project.categoryId;
+                }
+            }
+            renderProjectSelector();
+        });
+
+        projectFavourites.appendChild(chip);
+    });
+
+    // Render current (non-favourite) projects in dropdown
+    const currentNonFav = projects.filter(p => p.isCurrent && !p.isFavourite);
+    projectSelect.innerHTML = '<option value="">No project</option>';
+
+    currentNonFav.forEach(project => {
+        const option = document.createElement('option');
+        option.value = project.id;
+        option.textContent = project.name;
+        if (selectedProjectId === project.id) {
+            option.selected = true;
+        }
+        projectSelect.appendChild(option);
+    });
+
+    // Hide dropdown if no current non-favourite projects
+    projectSelect.style.display = currentNonFav.length > 0 ? '' : 'none';
+
+    // Hide entire selector if no projects at all
+    const hasAnyVisible = favourites.length > 0 || currentNonFav.length > 0;
+    projectSelector.style.display = hasAnyVisible ? '' : 'none';
+}
+
+function setupProjectListeners() {
+    addProjectBtn.addEventListener('click', handleAddProject);
+
+    projectSelect.addEventListener('change', () => {
+        const value = projectSelect.value;
+        if (value) {
+            selectedProjectId = value;
+            const project = getProjectById(value);
+            if (project && project.categoryId) {
+                categorySelect.value = project.categoryId;
+            }
+            // Deselect any favourite chips visually
+            renderProjectSelector();
+        } else {
+            selectedProjectId = null;
+            renderProjectSelector();
+        }
+    });
+}
+
+function handleAddProject() {
+    const name = newProjectName.value.trim();
+    const categoryId = newProjectCategory.value;
+
+    if (addProject(name, categoryId)) {
+        newProjectName.value = '';
+    }
+}
+
 // Task Tracking Functions
 function saveTaskToHistory(description, mode, duration, completedAt) {
     const selectedCategory = getCategoryById(categorySelect.value) || getDefaultCategory();
+
+    // Breaks don't inherit the focus session's project
+    const selectedProject = (mode !== 'break' && selectedProjectId) ? getProjectById(selectedProjectId) : null;
 
     const task = {
         description: description,
@@ -808,7 +1198,9 @@ function saveTaskToHistory(description, mode, duration, completedAt) {
         duration: duration,
         category: selectedCategory.id,
         categoryName: selectedCategory.name,
-        categoryColor: selectedCategory.color
+        categoryColor: selectedCategory.color,
+        projectId: selectedProject ? selectedProject.id : null,
+        projectName: selectedProject ? selectedProject.name : null
     };
 
     tasks.unshift(task); // Add to beginning of array
@@ -839,6 +1231,12 @@ function migrateTasksToCategories() {
             task.category = defaultCat.id;
             task.categoryName = defaultCat.name;
             task.categoryColor = defaultCat.color;
+            needsSave = true;
+        }
+        // Migrate old tasks without project fields
+        if (task.projectId === undefined) {
+            task.projectId = null;
+            task.projectName = null;
             needsSave = true;
         }
     });
@@ -930,6 +1328,17 @@ function createTaskElement(task) {
         categoryBadge.textContent = task.categoryName;
         categoryBadge.style.backgroundColor = task.categoryColor || '#0891b2';
         badges.appendChild(categoryBadge);
+    }
+
+    // Add project badge if available
+    if (task.projectId && task.projectName) {
+        const projectBadge = document.createElement('span');
+        projectBadge.className = 'task-project-badge';
+        const projectColor = task.categoryColor || '#0891b2';
+        projectBadge.textContent = task.projectName;
+        projectBadge.style.borderColor = projectColor;
+        projectBadge.style.color = projectColor;
+        badges.appendChild(projectBadge);
     }
 
     taskHeader.appendChild(taskDescription);
