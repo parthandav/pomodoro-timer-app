@@ -10,6 +10,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
     <script src="firebase-config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -23,7 +24,7 @@
             </nav>
             <div class="mode-indicator" id="modeIndicator">Focus Mode</div>
             <div class="user-profile" id="userProfile" style="display:none">
-                <img class="user-avatar" id="userAvatar" src="" alt="User avatar">
+                <img class="user-avatar" id="userAvatar" src="" alt="User avatar" referrerpolicy="no-referrer">
                 <span class="user-name" id="userName"></span>
                 <button class="btn btn-small btn-sign-out" id="signOutBtn" aria-label="Sign out">Sign Out</button>
             </div>
@@ -190,6 +191,84 @@
                     <h2>Task History</h2>
                     <button class="btn btn-small" id="clearAllHistoryBtn" aria-label="Clear all task history">Clear All History</button>
                 </div>
+
+                <!-- Report / Analytics Panel -->
+                <div id="reportPanel" class="report-panel">
+
+                    <!-- Range Tabs -->
+                    <div class="report-range-tabs" id="reportRangeTabs">
+                        <button class="report-range-btn active" data-range="weekly">Weekly</button>
+                        <button class="report-range-btn" data-range="monthly">Monthly</button>
+                        <button class="report-range-btn" data-range="custom">Custom</button>
+                    </div>
+
+                    <!-- Custom Date Range Picker -->
+                    <div class="report-custom-range hidden" id="reportCustomRange">
+                        <label for="reportDateFrom">From</label>
+                        <input type="date" id="reportDateFrom">
+                        <label for="reportDateTo">To</label>
+                        <input type="date" id="reportDateTo">
+                        <button class="btn btn-small" id="reportApplyCustomBtn">Apply</button>
+                    </div>
+
+                    <!-- Range Label -->
+                    <p class="report-range-label" id="reportRangeLabel"></p>
+
+                    <!-- Stat Tiles -->
+                    <div class="report-stats-row" id="reportStatsRow">
+                        <div class="report-stat-tile">
+                            <span class="report-stat-value" id="reportTotalFocusTime">—</span>
+                            <span class="report-stat-label">Focus time</span>
+                        </div>
+                        <div class="report-stat-tile">
+                            <span class="report-stat-value" id="reportTotalSessions">—</span>
+                            <span class="report-stat-label">Sessions</span>
+                        </div>
+                        <div class="report-stat-tile">
+                            <span class="report-stat-value" id="reportCurrentStreak">—</span>
+                            <span class="report-stat-label">Current streak</span>
+                        </div>
+                        <div class="report-stat-tile">
+                            <span class="report-stat-value" id="reportLongestStreak">—</span>
+                            <span class="report-stat-label">Longest streak</span>
+                        </div>
+                    </div>
+
+                    <!-- Charts Grid -->
+                    <div class="report-charts-grid" id="reportChartsGrid">
+
+                        <!-- Focus Time by Day -->
+                        <div class="report-chart-card report-chart-card--full">
+                            <h3 class="report-chart-title">Focus Time by Day</h3>
+                            <div class="report-chart-wrap" id="wrapFocusByDay">
+                                <canvas id="chartFocusByDay"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- By Category -->
+                        <div class="report-chart-card">
+                            <h3 class="report-chart-title">By Category</h3>
+                            <div class="report-chart-wrap" id="wrapByCategory">
+                                <canvas id="chartByCategory"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- By Project -->
+                        <div class="report-chart-card">
+                            <h3 class="report-chart-title">By Project (Top 5)</h3>
+                            <div class="report-chart-wrap" id="wrapByProject">
+                                <canvas id="chartByProject"></canvas>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Collapse Toggle -->
+                    <button class="report-toggle-btn" id="reportToggleBtn" aria-expanded="true">Hide Report</button>
+
+                </div>
+                <!-- End Report Panel -->
+
                 <div class="date-selector-bar" id="dateSelectorBar">
                     <!-- Date chips populated by JavaScript -->
                 </div>

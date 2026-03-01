@@ -21,10 +21,11 @@
 // -------------------------------------------------------
 
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyB8kBconwOkoBXwG5C7j-hoKw_V0Vdn3a8",
+  authDomain: "pomodorowa-c899d.firebaseapp.com",
+  projectId: "pomodorowa-c899d",
+  storageBucket: "pomodorowa-c899d.firebasestorage.app",
+  messagingSenderId: "887941166616",
+  appId: "1:887941166616:web:48502df466048d4f14f56d",
+  measurementId: "G-7PJEDF8FQG"
 };

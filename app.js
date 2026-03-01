@@ -11,15 +11,62 @@ let currentUser = null;
 let workDuration = 25 * 60; // Default 25 minutes in seconds
 
 let currentTime = workDuration;
-let timerInterval = null;
 let isRunning = false;
 let currentMode = 'work'; // 'work' or 'break'
 let endTime = null; // Timestamp when timer should reach 0
 let breakStartTime = null; // Timestamp when break started (for open-ended breaks)
 let isBreakActive = false; // Whether a break is currently in progress
-let timerWorker = null; // Web Worker for background timer (not throttled by browser)
-let completionTimeout = null; // Safety setTimeout for timer completion in frozen tabs
+// Single dedicated Worker for timer ticks.
+let timerWorker = new Worker('timer-worker.js');
 let swRegistration = null; // Service Worker registration for OS-level timer notifications
+
+// ─── Background-throttle prevention ─────────────────────────────────────────
+// Chrome 88+ suspends AudioContexts of background tabs and then applies
+// intensive timer throttling (1-min minimum) to all JS including Workers.
+// Fix requires TWO things:
+//   1. A non-zero audio signal — Chrome can silently optimize away gain=0,
+//      so we use a 1 Hz sine oscillator (below hearing range, 0.001 gain).
+//      Chrome sees actual non-zero audio being rendered → no optimization.
+//   2. onstatechange auto-resume — Chrome will still try to suspend the context;
+//      we immediately call resume() so the state never stays "suspended".
+let _keepAliveCtx = null;
+let _keepAliveOsc = null;
+
+function startKeepAlive() {
+    stopKeepAlive();
+    try {
+        _keepAliveCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // 1 Hz oscillator — completely inaudible (human hearing starts at ~20 Hz)
+        // but produces genuinely non-zero audio data Chrome cannot optimize away.
+        _keepAliveOsc = _keepAliveCtx.createOscillator();
+        const gain = _keepAliveCtx.createGain();
+        _keepAliveOsc.frequency.value = 1;   // 1 Hz
+        gain.gain.value = 0.001;             // 0.1% volume — inaudible
+        _keepAliveOsc.connect(gain);
+        gain.connect(_keepAliveCtx.destination);
+        _keepAliveOsc.start(0);
+
+        // Chrome suspends AudioContexts of background tabs; resume immediately
+        // whenever that happens so the context never stays in "suspended" state.
+        _keepAliveCtx.onstatechange = () => {
+            if (_keepAliveCtx && _keepAliveCtx.state === 'suspended') {
+                _keepAliveCtx.resume().catch(() => {});
+            }
+        };
+    } catch (e) {
+        // AudioContext unavailable
+    }
+}
+
+function stopKeepAlive() {
+    try {
+        if (_keepAliveOsc) { _keepAliveOsc.stop(); _keepAliveOsc.disconnect(); }
+        if (_keepAliveCtx) { _keepAliveCtx.close(); }
+    } catch (e) {}
+    _keepAliveCtx = null;
+    _keepAliveOsc = null;
+}
 let tasks = [];
 
 // Categories State
@@ -266,82 +313,51 @@ function requestNotificationPermission() {
     }
 }
 
-// Web Worker for reliable background timer (browsers throttle setInterval in background tabs)
-// Worker sends periodic 'tick' messages so tab title stays updated even when tab is inactive
-function createTimerWorker() {
-    const workerCode = `
-        let timerId = null;
-        let completionTimer = null;
-        self.onmessage = function(e) {
-            if (e.data.type === 'start-focus') {
-                if (timerId) clearInterval(timerId);
-                if (completionTimer) clearTimeout(completionTimer);
-                const endTime = e.data.endTime;
-                const delay = endTime - Date.now();
-
-                // Dedicated timeout for exact completion (more reliable than interval alone)
-                if (delay > 0) {
-                    completionTimer = setTimeout(function() {
-                        if (timerId) { clearInterval(timerId); timerId = null; }
-                        self.postMessage({ type: 'complete' });
-                    }, delay + 100);
-                }
-
-                // Interval for tick updates + completion check
-                timerId = setInterval(function() {
-                    const remainingMs = endTime - Date.now();
-                    if (remainingMs <= 0) {
-                        clearInterval(timerId);
-                        timerId = null;
-                        if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-                        self.postMessage({ type: 'complete' });
-                    } else {
-                        self.postMessage({ type: 'tick', remaining: Math.ceil(remainingMs / 1000) });
-                    }
-                }, 1000);
-            } else if (e.data.type === 'start-break') {
-                if (timerId) clearInterval(timerId);
-                if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-                const startTime = e.data.startTime;
-                timerId = setInterval(function() {
-                    const elapsedMs = Date.now() - startTime;
-                    self.postMessage({ type: 'tick', elapsed: Math.floor(elapsedMs / 1000) });
-                }, 1000);
-            } else if (e.data.type === 'stop') {
-                if (timerId) { clearInterval(timerId); timerId = null; }
-                if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-            }
-        };
-    `;
-    const blob = new Blob([workerCode], { type: 'application/javascript' });
-    return new Worker(URL.createObjectURL(blob));
-}
+// Wire up the single persistent Worker's message handler.
+// The Worker sends 'tick' every ~500ms and 'complete' when focus time runs out.
+timerWorker.onmessage = function (e) {
+    if (e.data.type === 'complete') {
+        timerComplete();
+    } else if (e.data.type === 'tick') {
+        if (e.data.remaining !== undefined) {
+            currentTime = e.data.remaining;
+        } else if (e.data.elapsed !== undefined) {
+            currentTime = e.data.elapsed;
+        }
+        updateDisplay();
+        updateTabTitle();
+    }
+};
 
 function stopTimerWorker() {
-    if (timerWorker) {
-        timerWorker.postMessage({ type: 'stop' });
-        timerWorker.terminate();
-        timerWorker = null;
-    }
+    timerWorker.postMessage({ type: 'stop' });
 }
 
-// Visibility change handler - catches timer completion when tab becomes visible
+// Visibility change handler — tab became visible again.
+// Immediately corrects the display from Date.now() (no waiting for next Worker tick)
+// and catches any completion that happened while the tab was hidden.
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', () => {
+        // When tab hides, Chrome will try to suspend our AudioContext.
+        // Pre-emptively call resume() so it stays in "running" state.
+        if (document.hidden && isRunning && _keepAliveCtx) {
+            _keepAliveCtx.resume().catch(() => {});
+        }
+
         if (document.hidden || !isRunning) return;
 
         if (currentMode === 'work' && endTime) {
             const remainingMs = endTime - Date.now();
             if (remainingMs <= 0) {
                 timerComplete();
-            } else {
-                currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
-                updateDisplay();
-                updateTabTitle();
+                return;
             }
+            // Snap display to accurate time immediately; Worker will continue ticking
+            currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
+            updateDisplay();
+            updateTabTitle();
         } else if (currentMode === 'break' && breakStartTime) {
-            const elapsedMs = Date.now() - breakStartTime;
-            currentTime = Math.floor(elapsedMs / 1000);
+            currentTime = Math.floor((Date.now() - breakStartTime) / 1000);
             updateDisplay();
             updateTabTitle();
         }
@@ -378,10 +394,10 @@ function startTimer() {
     }
 
     isRunning = true;
+    startKeepAlive(); // prevent Chrome's 5-min background throttling
 
     if (currentMode === 'break') {
         // Break mode: count UP (elapsed time)
-        // Break auto-starts when switching to break mode, so breakStartTime is already set
         if (!isBreakActive) {
             isBreakActive = true;
             breakStartTime = Date.now();
@@ -390,80 +406,18 @@ function startTimer() {
         // Hide start/pause button during break (breaks don't pause)
         startPauseBtn.style.display = 'none';
 
-        // Start Web Worker for reliable background tab title updates during break
-        stopTimerWorker();
-        try {
-            timerWorker = createTimerWorker();
-            timerWorker.onmessage = (e) => {
-                if (e.data.type === 'tick') {
-                    currentTime = e.data.elapsed;
-                    updateDisplay();
-                    updateTabTitle();
-                }
-            };
-            timerWorker.postMessage({ type: 'start-break', startTime: breakStartTime });
-        } catch (err) {
-            console.log('Web Worker not available, using fallback timer');
-        }
+        timerWorker.postMessage({ type: 'start-break', startTime: breakStartTime });
 
-        timerInterval = setInterval(() => {
-            const elapsedMs = Date.now() - breakStartTime;
-            currentTime = Math.floor(elapsedMs / 1000);
-            updateDisplay();
-            updateTabTitle();
-        }, 1000);
     } else {
         // Focus mode: count DOWN (remaining time)
         startPauseBtn.textContent = 'Pause';
         startPauseBtn.classList.add('active');
 
-        // Calculate target end time based on current remaining time
         endTime = Date.now() + (currentTime * 1000);
 
-        // Start Web Worker for reliable background timer + tab title updates
-        // (browsers throttle setInterval in background tabs, but Workers are not throttled)
-        stopTimerWorker();
-        try {
-            timerWorker = createTimerWorker();
-            timerWorker.onmessage = (e) => {
-                if (e.data.type === 'complete') {
-                    timerComplete();
-                } else if (e.data.type === 'tick') {
-                    currentTime = Math.max(0, e.data.remaining);
-                    updateDisplay();
-                    updateTabTitle();
-                }
-            };
-            timerWorker.postMessage({ type: 'start-focus', endTime: endTime });
-        } catch (err) {
-            console.log('Web Worker not available, using fallback timer');
-        }
+        timerWorker.postMessage({ type: 'start-focus', endTime: endTime });
 
-        timerInterval = setInterval(() => {
-            // Calculate remaining time based on actual elapsed time
-            const remainingMs = endTime - Date.now();
-            currentTime = Math.max(0, Math.ceil(remainingMs / 1000));
-
-            updateDisplay();
-            updateTabTitle();
-
-            if (currentTime <= 0) {
-                timerComplete();
-            }
-        }, 1000);
-
-        // Safety setTimeout for exact completion time
-        // Browsers may honor a one-shot timeout better than intervals for background tabs
-        clearCompletionTimeout();
-        completionTimeout = setTimeout(() => {
-            if (isRunning && currentMode === 'work') {
-                timerComplete();
-            }
-        }, currentTime * 1000 + 500);
-
-        // Schedule OS-level notification via Service Worker.
-        // The SW runs independently of the tab's event loop, so the notification
-        // fires at the correct time even when the tab is throttled in the background.
+        // Schedule OS-level notification via Service Worker (fires even when tab is throttled)
         postToSW({
             type: 'schedule-completion',
             endTime: endTime,
@@ -472,18 +426,10 @@ function startTimer() {
     }
 }
 
-function clearCompletionTimeout() {
-    if (completionTimeout) {
-        clearTimeout(completionTimeout);
-        completionTimeout = null;
-    }
-}
-
 function pauseTimer() {
     isRunning = false;
-    clearInterval(timerInterval);
     stopTimerWorker();
-    clearCompletionTimeout();
+    stopKeepAlive(); // allow Chrome to throttle again once timer is not running
     postToSW({ type: 'cancel-completion' });
 
     if (currentMode === 'work') {
@@ -580,9 +526,11 @@ function timerComplete() {
     // Breaks never auto-complete - they run until user switches to focus
     if (currentMode === 'break') return;
 
-    // Guard against double-firing (Worker + interval can both trigger this)
+    // Guard against double-firing (Worker message + visibilitychange can both trigger this)
     if (!isRunning && currentTime > 0) return;
 
+    // Capture endTime before pauseTimer() clears it
+    const completionTime = endTime;
     pauseTimer();
 
     // Play completion sound
@@ -590,7 +538,7 @@ function timerComplete() {
 
     // Save focus session to history (use endTime as completion timestamp, not now)
     const completedTaskName = taskInput.value.trim() || 'Untitled Task';
-    saveTaskToHistory(completedTaskName, currentMode, workDuration, endTime);
+    saveTaskToHistory(completedTaskName, currentMode, workDuration, completionTime);
     taskInput.value = ''; // Clear input after completion
 
     // Show inline completion message
@@ -776,6 +724,7 @@ function showView(viewName) {
         historyView.classList.remove('hidden');
         historyNavBtn.classList.add('active');
         initHistoryView();
+        initReportPanel();
     }
 }
 
@@ -1386,6 +1335,7 @@ function saveTaskToHistory(description, mode, duration, completedAt) {
     tasks.unshift(task); // Add to beginning of in-memory array (immediate UI update)
     saveTaskToFirestore(task); // Persist to Firestore (async, fire-and-forget)
     displayTaskHistory();
+    if (currentView === 'history') renderReport();
 }
 
 async function loadTaskHistory() {
@@ -1470,6 +1420,334 @@ function getDateKey(isoString) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// ── Reporting / Analytics ─────────────────────────────────────────────────
+
+const reportCharts = { focusByDay: null, byCategory: null, byProject: null };
+let reportState = { mode: 'weekly', startDate: null, endDate: null };
+let reportPanelInitialized = false;
+
+function initReportPanel() {
+    if (reportPanelInitialized) {
+        renderReport();
+        return;
+    }
+    reportPanelInitialized = true;
+
+    // Wire range tab buttons
+    document.querySelectorAll('.report-range-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.report-range-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            reportState.mode = btn.dataset.range;
+            const customRange = document.getElementById('reportCustomRange');
+            if (reportState.mode === 'custom') {
+                customRange.classList.remove('hidden');
+            } else {
+                customRange.classList.add('hidden');
+                renderReport();
+            }
+        });
+    });
+
+    document.getElementById('reportApplyCustomBtn').addEventListener('click', applyCustomRange);
+
+    // Collapse / expand toggle
+    document.getElementById('reportToggleBtn').addEventListener('click', () => {
+        const chartsGrid = document.getElementById('reportChartsGrid');
+        const statsRow   = document.getElementById('reportStatsRow');
+        const btn        = document.getElementById('reportToggleBtn');
+        const expanded   = btn.getAttribute('aria-expanded') === 'true';
+        chartsGrid.classList.toggle('hidden', expanded);
+        statsRow.classList.toggle('hidden', expanded);
+        btn.setAttribute('aria-expanded', String(!expanded));
+        btn.textContent = expanded ? 'Show Report' : 'Hide Report';
+    });
+
+    // Default date values for custom picker
+    const today = new Date();
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(today.getDate() - 6);
+    document.getElementById('reportDateFrom').valueAsDate = sevenDaysAgo;
+    document.getElementById('reportDateTo').valueAsDate   = today;
+
+    reportState.mode = 'weekly';
+    document.querySelectorAll('.report-range-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.range === 'weekly');
+    });
+
+    renderReport();
+}
+
+function applyCustomRange() {
+    const fromVal = document.getElementById('reportDateFrom').value;
+    const toVal   = document.getElementById('reportDateTo').value;
+    if (!fromVal || !toVal) return;
+    const start = new Date(fromVal + 'T00:00:00');
+    const end   = new Date(toVal   + 'T00:00:00');
+    if (start > end) {
+        alert('Start date must be before end date.');
+        return;
+    }
+    reportState.startDate = start;
+    reportState.endDate   = end;
+    renderReport();
+}
+
+function computeReportRange(mode) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (mode === 'weekly') {
+        const start = new Date(today);
+        start.setDate(today.getDate() - 6);
+        return { start, end: today };
+    }
+    if (mode === 'monthly') {
+        const start = new Date(today.getFullYear(), today.getMonth(), 1);
+        const end   = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        return { start, end };
+    }
+    // custom
+    return { start: reportState.startDate, end: reportState.endDate };
+}
+
+function getTasksInRange(startDate, endDate) {
+    const start = startDate.getTime();
+    const endDay = new Date(endDate);
+    endDay.setDate(endDay.getDate() + 1);
+    const end = endDay.getTime();
+    return tasks.filter(t => {
+        if (t.mode !== 'work') return false;
+        const ts = new Date(t.timestamp).getTime();
+        return ts >= start && ts < end;
+    });
+}
+
+function computeSummaryStats(filteredTasks) {
+    const totalSeconds = filteredTasks.reduce((sum, t) => sum + (t.duration || 0), 0);
+    const totalMins = Math.round(totalSeconds / 60);
+    const hours = Math.floor(totalMins / 60);
+    const mins  = totalMins % 60;
+    const focusTimeLabel = hours > 0
+        ? (mins > 0 ? `${hours}h ${mins}m` : `${hours}h`)
+        : `${totalMins}m`;
+    return { focusTimeLabel, sessionCount: filteredTasks.length };
+}
+
+function computeStreaks() {
+    const focusDates = new Set(
+        tasks.filter(t => t.mode === 'work').map(t => getDateKey(t.timestamp))
+    );
+    if (focusDates.size === 0) return { currentStreak: 0, longestStreak: 0 };
+
+    const sorted = Array.from(focusDates).sort();
+
+    let longestStreak = 1;
+    let runLength = 1;
+    for (let i = 1; i < sorted.length; i++) {
+        const prev = new Date(sorted[i - 1] + 'T00:00:00');
+        const curr = new Date(sorted[i]     + 'T00:00:00');
+        const diffDays = (curr - prev) / 86400000;
+        if (diffDays === 1) {
+            runLength++;
+            if (runLength > longestStreak) longestStreak = runLength;
+        } else {
+            runLength = 1;
+        }
+    }
+
+    // Current streak: count backwards from today (or yesterday)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayKey = getDateKey(today.toISOString());
+    const yest = new Date(today);
+    yest.setDate(today.getDate() - 1);
+    const yesterdayKey = getDateKey(yest.toISOString());
+
+    let currentStreak = 0;
+    if (focusDates.has(todayKey) || focusDates.has(yesterdayKey)) {
+        const startDate = focusDates.has(todayKey) ? today : yest;
+        currentStreak = 1;
+        const check = new Date(startDate);
+        check.setDate(check.getDate() - 1);
+        while (focusDates.has(getDateKey(check.toISOString()))) {
+            currentStreak++;
+            check.setDate(check.getDate() - 1);
+        }
+    }
+
+    return { currentStreak, longestStreak };
+}
+
+function computeFocusByDay(startDate, endDate) {
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const labels = [];
+    const data   = [];
+    const cursor = new Date(startDate);
+    while (cursor <= endDate) {
+        const key    = getDateKey(cursor.toISOString());
+        const dayMin = tasks
+            .filter(t => t.mode === 'work' && getDateKey(t.timestamp) === key)
+            .reduce((sum, t) => sum + (t.duration || 0), 0) / 60;
+        labels.push(`${MONTHS[cursor.getMonth()]} ${cursor.getDate()}`);
+        data.push(Math.round(dayMin));
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return { labels, data };
+}
+
+function computeByCategory(filteredTasks) {
+    const map = {};
+    filteredTasks.forEach(t => {
+        if (!map[t.category]) {
+            map[t.category] = { name: t.categoryName || 'Unknown', color: t.categoryColor || '#6b7280', totalSeconds: 0 };
+        }
+        map[t.category].totalSeconds += (t.duration || 0);
+    });
+    const entries = Object.values(map).sort((a, b) => b.totalSeconds - a.totalSeconds);
+    return {
+        labels: entries.map(e => e.name),
+        data:   entries.map(e => Math.round(e.totalSeconds / 60)),
+        colors: entries.map(e => e.color)
+    };
+}
+
+function computeByProject(filteredTasks, topN = 5) {
+    const map = {};
+    filteredTasks.forEach(t => {
+        if (!t.projectId) return;
+        if (!map[t.projectId]) map[t.projectId] = { name: t.projectName || 'Unknown', totalSeconds: 0 };
+        map[t.projectId].totalSeconds += (t.duration || 0);
+    });
+    const entries = Object.values(map).sort((a, b) => b.totalSeconds - a.totalSeconds).slice(0, topN);
+    return {
+        labels: entries.map(e => e.name),
+        data:   entries.map(e => Math.round(e.totalSeconds / 60))
+    };
+}
+
+function createOrReplaceChart(key, canvasId, config) {
+    if (reportCharts[key]) {
+        reportCharts[key].destroy();
+        reportCharts[key] = null;
+    }
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    reportCharts[key] = new Chart(canvas.getContext('2d'), config);
+}
+
+function renderReportCharts(filteredTasks, startDate, endDate) {
+    // Chart 1: Focus time by day (vertical bar) — always render
+    const { labels: dayLabels, data: dayData } = computeFocusByDay(startDate, endDate);
+    createOrReplaceChart('focusByDay', 'chartFocusByDay', {
+        type: 'bar',
+        data: {
+            labels: dayLabels,
+            datasets: [{
+                label: 'Focus (min)',
+                data: dayData,
+                backgroundColor: 'rgba(8, 145, 178, 0.7)',
+                borderColor: '#0891b2',
+                borderWidth: 1,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Minutes' } },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+
+    // Chart 2: By category (doughnut)
+    const wrapCat = document.getElementById('wrapByCategory');
+    if (filteredTasks.length === 0) {
+        if (reportCharts.byCategory) { reportCharts.byCategory.destroy(); reportCharts.byCategory = null; }
+        wrapCat.innerHTML = '<p class="empty-state">No focus sessions in this range.</p>';
+    } else {
+        wrapCat.innerHTML = '<canvas id="chartByCategory"></canvas>';
+        const { labels: catLabels, data: catData, colors } = computeByCategory(filteredTasks);
+        createOrReplaceChart('byCategory', 'chartByCategory', {
+            type: 'doughnut',
+            data: {
+                labels: catLabels,
+                datasets: [{ data: catData, backgroundColor: colors, borderWidth: 2, borderColor: '#ffffff' }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+                    tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} min` } }
+                }
+            }
+        });
+    }
+
+    // Chart 3: By project (horizontal bar)
+    const wrapProj = document.getElementById('wrapByProject');
+    const tasksWithProjects = filteredTasks.filter(t => t.projectId);
+    if (tasksWithProjects.length === 0) {
+        if (reportCharts.byProject) { reportCharts.byProject.destroy(); reportCharts.byProject = null; }
+        wrapProj.innerHTML = '<p class="empty-state">No project-tagged sessions in this range.</p>';
+    } else {
+        wrapProj.innerHTML = '<canvas id="chartByProject"></canvas>';
+        const { labels: projLabels, data: projData } = computeByProject(filteredTasks);
+        createOrReplaceChart('byProject', 'chartByProject', {
+            type: 'bar',
+            data: {
+                labels: projLabels,
+                datasets: [{
+                    label: 'Focus (min)',
+                    data: projData,
+                    backgroundColor: 'rgba(139, 92, 246, 0.7)',
+                    borderColor: '#8b5cf6',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, title: { display: true, text: 'Minutes' } },
+                    y: { grid: { display: false } }
+                }
+            }
+        });
+    }
+}
+
+function renderReport() {
+    const { start, end } = computeReportRange(reportState.mode);
+    if (!start || !end) return;
+
+    reportState.startDate = start;
+    reportState.endDate   = end;
+
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    document.getElementById('reportRangeLabel').textContent =
+        `${MONTHS[start.getMonth()]} ${start.getDate()} – ${MONTHS[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
+
+    const filtered = getTasksInRange(start, end);
+    const { focusTimeLabel, sessionCount } = computeSummaryStats(filtered);
+    const { currentStreak, longestStreak }  = computeStreaks();
+
+    document.getElementById('reportTotalFocusTime').textContent = focusTimeLabel || '0m';
+    document.getElementById('reportTotalSessions').textContent  = sessionCount;
+    document.getElementById('reportCurrentStreak').textContent  = currentStreak + (currentStreak === 1 ? ' day' : ' days');
+    document.getElementById('reportLongestStreak').textContent  = longestStreak + (longestStreak === 1 ? ' day' : ' days');
+
+    renderReportCharts(filtered, start, end);
+}
+
+// ── End Reporting ─────────────────────────────────────────────────────────
+
 function createTaskElement(task) {
     const taskItem = document.createElement('div');
     taskItem.className = `task-item ${task.mode === 'break' ? 'break-task' : ''}`;
@@ -1489,34 +1767,44 @@ function createTaskElement(task) {
     taskMode.textContent = task.mode === 'work' ? 'Focus' : 'Break';
     badges.appendChild(taskMode);
 
-    // Add category badge if available
-    if (task.category && task.categoryName) {
-        const categoryBadge = document.createElement('span');
-        categoryBadge.className = 'task-category-badge';
-        categoryBadge.textContent = task.categoryName;
-        categoryBadge.style.backgroundColor = task.categoryColor || '#0891b2';
-        badges.appendChild(categoryBadge);
+    // Add category and project badges for focus sessions only
+    if (task.mode !== 'break') {
+        if (task.category && task.categoryName) {
+            const categoryBadge = document.createElement('span');
+            categoryBadge.className = 'task-category-badge';
+            categoryBadge.textContent = task.categoryName;
+            categoryBadge.style.backgroundColor = task.categoryColor || '#0891b2';
+            badges.appendChild(categoryBadge);
+        }
+
+        if (task.projectId && task.projectName) {
+            const projectBadge = document.createElement('span');
+            projectBadge.className = 'task-project-badge';
+            const projectColor = task.categoryColor || '#0891b2';
+            projectBadge.textContent = task.projectName;
+            projectBadge.style.borderColor = projectColor;
+            projectBadge.style.color = projectColor;
+            badges.appendChild(projectBadge);
+        }
     }
 
-    // Add project badge if available
-    if (task.projectId && task.projectName) {
-        const projectBadge = document.createElement('span');
-        projectBadge.className = 'task-project-badge';
-        const projectColor = task.categoryColor || '#0891b2';
-        projectBadge.textContent = task.projectName;
-        projectBadge.style.borderColor = projectColor;
-        projectBadge.style.color = projectColor;
-        badges.appendChild(projectBadge);
-    }
+    // Note toggle button — pencil icon, highlighted when a note exists
+    const noteBtn = document.createElement('button');
+    noteBtn.className = 'note-btn' + (task.note ? ' has-note' : '');
+    noteBtn.title = task.note ? 'View/edit note' : 'Add note';
+    noteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>`;
 
     taskHeader.appendChild(taskDescription);
     taskHeader.appendChild(badges);
+    taskHeader.appendChild(noteBtn);
 
     const taskMetadata = document.createElement('div');
     taskMetadata.className = 'task-metadata';
 
     const timestamp = document.createElement('span');
-    timestamp.textContent = formatTimestamp(task.timestamp);
+    const endTs = new Date(task.timestamp);
+    const startTs = new Date(endTs.getTime() - (task.duration || 0) * 1000);
+    timestamp.textContent = `${formatClockTime(startTs)} – ${formatClockTime(endTs)}`;
 
     const duration = document.createElement('span');
     duration.textContent = `Duration: ${formatDuration(task.duration)}`;
@@ -1524,31 +1812,76 @@ function createTaskElement(task) {
     taskMetadata.appendChild(timestamp);
     taskMetadata.appendChild(duration);
 
+    // ── Note panel (hidden until noteBtn is clicked) ──────────────────────────
+    const notePanel = document.createElement('div');
+    notePanel.className = 'task-note-panel';
+
+    const noteTextarea = document.createElement('textarea');
+    noteTextarea.className = 'task-note-textarea';
+    noteTextarea.placeholder = 'Add a note about this session...';
+    noteTextarea.value = task.note || '';
+
+    const noteActions = document.createElement('div');
+    noteActions.className = 'note-actions';
+
+    const noteSaveBtn = document.createElement('button');
+    noteSaveBtn.className = 'btn btn-small';
+    noteSaveBtn.textContent = 'Save';
+
+    const noteCancelBtn = document.createElement('button');
+    noteCancelBtn.className = 'btn btn-small btn-secondary';
+    noteCancelBtn.textContent = 'Cancel';
+
+    noteActions.appendChild(noteSaveBtn);
+    noteActions.appendChild(noteCancelBtn);
+    notePanel.appendChild(noteTextarea);
+    notePanel.appendChild(noteActions);
+
+    noteBtn.addEventListener('click', () => {
+        const isOpen = notePanel.classList.contains('open');
+        if (isOpen) {
+            notePanel.classList.remove('open');
+        } else {
+            noteTextarea.value = task.note || '';
+            notePanel.classList.add('open');
+            noteTextarea.focus();
+        }
+    });
+
+    noteSaveBtn.addEventListener('click', () => {
+        const text = noteTextarea.value.trim();
+        task.note = text;
+        noteBtn.classList.toggle('has-note', !!text);
+        noteBtn.title = text ? 'View/edit note' : 'Add note';
+        saveTaskNote(task.id, text);
+        notePanel.classList.remove('open');
+    });
+
+    noteCancelBtn.addEventListener('click', () => {
+        noteTextarea.value = task.note || '';
+        notePanel.classList.remove('open');
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     taskItem.appendChild(taskHeader);
     taskItem.appendChild(taskMetadata);
+    taskItem.appendChild(notePanel);
 
     return taskItem;
 }
 
-function formatTimestamp(isoString) {
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
+function saveTaskNote(taskId, note) {
+    if (!currentUser || !taskId) return;
+    const taskInMemory = tasks.find(t => t.id === taskId);
+    if (taskInMemory) taskInMemory.note = note;
+    db.collection(`users/${currentUser.uid}/tasks`)
+        .doc(taskId)
+        .update({ note })
+        .catch(err => console.error('Error saving note:', err));
+}
 
-    if (diffMins < 1) {
-        return 'Just now';
-    } else if (diffMins < 60) {
-        return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
-    } else if (diffHours < 24) {
-        return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-    } else if (diffDays < 7) {
-        return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-    } else {
-        return date.toLocaleDateString();
-    }
+function formatClockTime(date) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 // History View Functions
@@ -1657,6 +1990,7 @@ async function clearTaskHistory() {
         // Also refresh history view if it's visible
         if (currentView === 'history') {
             initHistoryView();
+            renderReport();
         }
     }
 }
