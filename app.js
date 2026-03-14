@@ -178,11 +178,6 @@ function initFirebaseAuth() {
     document.getElementById('googleSignInBtn').addEventListener('click', handleSignIn);
     document.getElementById('signOutBtn').addEventListener('click', handleSignOut);
 
-    // Handle the result when returning from a redirect sign-in
-    auth.getRedirectResult().catch((err) => {
-        alert('Sign-in failed: ' + err.message);
-    });
-
     auth.onAuthStateChanged(async (user) => {
         if (user) {
             await loadUserData(user);
@@ -196,7 +191,7 @@ function initFirebaseAuth() {
 async function handleSignIn() {
     const provider = new firebase.auth.GoogleAuthProvider();
     try {
-        await auth.signInWithRedirect(provider);
+        await auth.signInWithPopup(provider);
     } catch (err) {
         alert('Sign-in failed: ' + err.message);
     }
